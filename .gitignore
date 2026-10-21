@@ -1,0 +1,32 @@
+# Go
+backend/gacha-calendar
+backend/gacha-calendar.exe
+*.test
+*.out
+coverage.*
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# Embedded build output (placeholder index.html is committed on purpose)
+backend/web/assets/dist/*
+!backend/web/assets/dist/index.html
+
+# Local databases & downloaded covers
+*.db
+*.db-shm
+*.db-wal
+data/
+
+# Deploy secrets
+deploy/*.env
+deploy/*.key
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
