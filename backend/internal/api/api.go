@@ -67,6 +67,7 @@ func (h *handlers) admin(next func(w http.ResponseWriter, r *http.Request)) http
 type timeMeta struct {
 	UTC             string `json:"utc"`
 	UnixSeconds     int64  `json:"unix_seconds"`
+	EndUTC          string `json:"end_utc,omitempty"`
 	DurationSeconds int64  `json:"duration_seconds,omitempty"`
 	UntilSeconds    *int64 `json:"until_seconds,omitempty"`
 }
@@ -77,8 +78,8 @@ func timeMetaOf(t *time.Time, until *time.Time) *timeMeta {
 	}
 	meta := &timeMeta{UTC: t.UTC().Format(time.RFC3339), UnixSeconds: t.Unix()}
 	if until != nil {
-		seconds := until.Sub(*t).Seconds()
-		meta.DurationSeconds = int64(seconds)
+		meta.EndUTC = until.UTC().Format(time.RFC3339)
+		meta.DurationSeconds = int64(until.Sub(*t).Seconds())
 	}
 	return meta
 }
