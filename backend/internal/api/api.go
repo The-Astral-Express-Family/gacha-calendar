@@ -733,7 +733,12 @@ func (h *handlers) putOverride(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	// Recompute this game's prediction immediately with the override applied.
+	// Recompute synchronously so the correction is visible immediately,
+	// then let the background refresh re-derive from fresh sources.
+	if err := h.d.Collector.RecomputeGame(gameID, true); err != nil {
+		writeError(w, http.StatusInternalServerError, "recompute_failed", err.Error())
+		return
+	}
 	h.d.Collector.RequestRefresh([]games.GameID{gameID})
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
 		"game": string(gameID), "applied_at": row.AppliedAt.Format(time.RFC3339),
@@ -745,6 +750,10 @@ func (h *handlers) deleteOverride(w http.ResponseWriter, r *http.Request) {
 	result := h.d.DB.Delete(&model.Override{}, "game_id = ?", gameID)
 	if result.Error != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", result.Error.Error())
+		return
+	}
+	if err := h.d.Collector.RecomputeGame(games.GameID(gameID), false); err != nil {
+		writeError(w, http.StatusInternalServerError, "recompute_failed", err.Error())
 		return
 	}
 	h.d.Collector.RequestRefresh([]games.GameID{games.GameID(gameID)})

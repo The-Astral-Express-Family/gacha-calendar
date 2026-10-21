@@ -809,3 +809,60 @@ func timeEqualPtr(a, b *time.Time) bool {
 	}
 	return a.Equal(*b)
 }
+
+// planFromPrediction reconstructs a plan struct from a stored prediction row.
+func planFromPrediction(row *model.Prediction) *parse.Plan {
+	if row == nil {
+		return nil
+	}
+	return &parse.Plan{
+		Version:           row.Version,
+		UpdateStart:       derefTime(row.UpdateStart),
+		UpdateEnd:         derefTime(row.UpdateEnd),
+		PreviewStart:      derefTime(row.PreviewStart),
+		PreviewEnd:        derefTime(row.PreviewEnd),
+		UpdateConfidence:  row.UpdateConfidence,
+		PreviewConfidence: row.PreviewConfidence,
+		UpdateEvidence:    row.UpdateEvidence,
+		PreviewEvidence:   row.PreviewEvidence,
+	}
+}
+
+// RecomputeGame re-derives one game's prediction without any network access.
+// usePriorBase keeps the previous active prediction as the base plan (it
+// carries the last full collection's video/dynamic evidence) with the stored
+// override layered over it — the plugin's mergePlan semantics, used when a
+// correction is written. With usePriorBase=false the base is re-derived from
+// the stored announcement facts by the pure rules, used when a correction is
+// cleared so stale agent values cannot survive. The next scheduled refresh
+// re-derives everything from fresh sources either way.
+func (c *Collector) RecomputeGame(id games.GameID, usePriorBase bool) error {
+	game, ok := games.Get(id)
+	if !ok {
+		return fmt.Errorf("unknown game %s", id)
+	}
+	now := time.Now().UTC()
+
+	var prior model.Prediction
+	var plan *parse.Plan
+	havePrior := c.db.Where("game_id = ? AND active = ?", string(id), true).
+		First(&prior).Error == nil
+	if havePrior && usePriorBase {
+		plan = planFromPrediction(&prior)
+	} else if row, have := c.latestVersion(id); have {
+		plan = parse.PlanNext(game, factsFromVersion(row), now, nil, nil)
+		plan = c.carryOfficialPreview(id, plan, now)
+	}
+	plan = c.mergeOverride(game, id, plan)
+	if err := c.upsertPrediction(id, plan, 0, now); err != nil {
+		return err
+	}
+	status := "ok"
+	if plan == nil {
+		status = "error"
+	}
+	c.db.Model(&model.GameState{}).Where("id = ?", string(id)).Updates(map[string]any{
+		"status": status,
+	})
+	return nil
+}
