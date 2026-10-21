@@ -226,13 +226,59 @@ func (c *Client) ensureCookie(ctx context.Context) (string, error) {
 	return cookie, nil
 }
 
+// FlexString unmarshals a JSON value that may arrive as either a string or
+// a number (Bilibili returns article ids as numbers).
+type FlexString string
+
+func (f *FlexString) UnmarshalJSON(data []byte) error {
+	text := strings.TrimSpace(string(data))
+	if text == "null" {
+		*f = ""
+		return nil
+	}
+	if len(text) >= 2 && text[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		*f = FlexString(s)
+		return nil
+	}
+	*f = FlexString(text)
+	return nil
+}
+
 // Article is one row of the official column list.
 type Article struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Summary     string   `json:"summary"`
-	PublishTime int64    `json:"publish_time"`
-	ImageURLs   []string `json:"image_urls"`
+	ID          FlexString `json:"id"`
+	Title       string     `json:"title"`
+	Summary     string     `json:"summary"`
+	PublishTime int64      `json:"publish_time"`
+	ImageURLs   []string   `json:"image_urls"`
+}
+
+// IDString returns the article id as a plain string.
+func (a Article) IDString() string { return string(a.ID) }
+
+// FlexInt64 unmarshals a JSON value that may arrive as either a number or a
+// numeric string (the dynamics feed sends pub_ts as string on some accounts).
+type FlexInt64 int64
+
+func (f *FlexInt64) UnmarshalJSON(data []byte) error {
+	text := strings.TrimSpace(string(data))
+	if text == "null" || text == `""` {
+		*f = 0
+		return nil
+	}
+	if len(text) >= 2 && text[0] == '"' {
+		text = strings.Trim(text, `"`)
+	}
+	value, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return err
+	}
+	*f = FlexInt64(value)
+	return nil
 }
 
 func (c *Client) ArticleList(ctx context.Context, mid string) ([]Article, error) {
@@ -298,11 +344,11 @@ type Archive struct {
 
 // upMid appears as `upMid` (camel case) in series rows; decode via alias.
 type seriesArchive struct {
-	BVID    string `json:"bvid"`
-	Title   string `json:"title"`
-	Pubdate int64  `json:"pubdate"`
-	UpMid   string `json:"upMid"`
-	Pic     string `json:"pic"`
+	BVID    string      `json:"bvid"`
+	Title   string      `json:"title"`
+	Pubdate int64       `json:"pubdate"`
+	UpMid   FlexString  `json:"upMid"`
+	Pic     string      `json:"pic"`
 }
 
 // FeatureVideos lists official collection uploads matching a keyword.
@@ -325,7 +371,7 @@ func (c *Client) FeatureVideos(ctx context.Context, mid, keyword string) ([]Arch
 	for _, row := range payload.Archives {
 		out = append(out, Archive{
 			BVID: row.BVID, Title: StripHTML(row.Title), Pubdate: row.Pubdate,
-			AuthorID: row.UpMid, Pic: row.Pic,
+			AuthorID: string(row.UpMid), Pic: row.Pic,
 		})
 	}
 	return out, nil
@@ -379,7 +425,7 @@ type dynamicFeed struct {
 		IDAlt   uint64 `json:"id"`
 		Modules struct {
 			Author struct {
-				PubTS int64 `json:"pub_ts"`
+				PubTS FlexInt64 `json:"pub_ts"`
 			} `json:"module_author"`
 			Dynamic struct {
 				Desc struct {
@@ -428,7 +474,7 @@ func (c *Client) Dynamics(ctx context.Context, mid string) ([]Dynamic, error) {
 	}
 	out := make([]Dynamic, 0, len(payload.Items))
 	for _, item := range payload.Items {
-		dyn := Dynamic{ID: item.ID, Pubdate: item.Modules.Author.PubTS}
+		dyn := Dynamic{ID: item.ID, Pubdate: int64(item.Modules.Author.PubTS)}
 		if dyn.ID == "" {
 			dyn.ID = strconv.FormatUint(item.IDAlt, 10)
 		}

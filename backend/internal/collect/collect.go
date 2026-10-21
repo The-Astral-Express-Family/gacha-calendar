@@ -14,6 +14,7 @@ package collect
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -262,7 +263,7 @@ func (c *Collector) refreshGame(ctx context.Context, id games.GameID) GameResult
 	now := time.Now().UTC()
 	var errs []string
 	log := func(format string, args ...any) {
-		c.log.Info("gacha: "+game.Name+" "+format, args...)
+		c.log.Info("gacha: " + game.Name + " " + fmt.Sprintf(format, args...))
 	}
 	log("refresh start (article=%s)", state.LastArticleID)
 
@@ -280,7 +281,7 @@ func (c *Collector) refreshGame(ctx context.Context, id games.GameID) GameResult
 	picked := pickArticle(game, articles, now)
 	var articlePostID uint
 	if picked != nil {
-		if picked.ID != state.LastArticleID {
+		if picked.IDString() != state.LastArticleID {
 			var facts *parse.ArticleFacts
 			published := time.Unix(picked.PublishTime, 0).UTC()
 			summaryText := bili.StripHTML(picked.Summary)
@@ -296,7 +297,7 @@ func (c *Collector) refreshGame(ctx context.Context, id games.GameID) GameResult
 			// Summary-first merge: only read the heavily rate-limited full
 			// column when the summary lacks a decisive field.
 			missing := missingFields(game, facts)
-			needsFullText := isCVID(picked.ID) && len(missing) > 0
+			needsFullText := isCVID(picked.IDString()) && len(missing) > 0
 			if facts != nil {
 				log("summary parse: version=%s update=%s missing=%v full_text=%v",
 					facts.Version, shortCST(facts.UpdateStart), missing, needsFullText)
@@ -305,8 +306,8 @@ func (c *Collector) refreshGame(ctx context.Context, id games.GameID) GameResult
 			}
 
 			post := &model.Post{
-				GameID: string(id), SourceType: "article", ExternalID: picked.ID,
-				URL: bili.ArticleURL(picked.ID), Title: picked.Title,
+				GameID: string(id), SourceType: "article", ExternalID: picked.IDString(),
+				URL: bili.ArticleURL(picked.IDString()), Title: picked.Title,
 				Summary: summaryText, Author: game.Name,
 				PublishTime: published, FetchedAt: now, CoverURL: cover,
 				IsUpdateNotice: true,
@@ -317,7 +318,7 @@ func (c *Collector) refreshGame(ctx context.Context, id games.GameID) GameResult
 			articlePostID = post.ID
 
 			if needsFullText {
-				view, viewErr := c.bili.ArticleView(ctx, picked.ID)
+				view, viewErr := c.bili.ArticleView(ctx, picked.IDString())
 				if viewErr != nil {
 					if ctx.Err() != nil {
 						return GameResult{Game: string(id), Status: "error", Error: ctx.Err().Error()}
@@ -362,7 +363,7 @@ func (c *Collector) refreshGame(ctx context.Context, id games.GameID) GameResult
 						errs = append(errs, "版本入库："+err.Error())
 					}
 				}
-				state.LastArticleID = picked.ID
+				state.LastArticleID = picked.IDString()
 			} else {
 				errs = append(errs, "最新公告未解析出更新时间，沿用上次结果")
 			}

@@ -60,7 +60,7 @@ func New(deps api.Deps, coversDir string, logger *slog.Logger) http.Handler {
 	})
 
 	// Collected cover images: long cache, hashed filenames.
-	coversServer := http.FileServer(staticFS{http.Dir(coversDir)})
+	coversServer := http.StripPrefix("/covers/", http.FileServer(staticFS{http.Dir(coversDir)}))
 	mux.Handle("GET /covers/", cacheMiddleware(cacheControl(24*time.Hour, false), coversServer))
 
 	// Fallback visuals: content is static per release.
