@@ -54,5 +54,8 @@ cd backend && go build -o gacha-calendar ./cmd/gacha-calendar
 
 ## 部署
 
-`deploy/` 内含 systemd 单元、Nginx 参考配置与部署说明；
+`deploy/` 内含 systemd 单元、Nginx 参考配置与部署说明（详见 `deploy/README.md`）；
 线上源站 `gacha-origin.modenc.top`，CDN `gacha.modenc.top`（`/api`、`/healthz` 不缓存，其余缓存）。
+
+> CDN 注意：`gacha.modenc.top` 需接入**标准 Web CDN/EdgeOne**（回源 `gacha-origin.modenc.top`）。
+> 若 CNAME 指向腾讯云 VOD 点播加速域名（`*.tdnsvod1.cn`），所有普通路径会被节点以 514 直接拒绝。
