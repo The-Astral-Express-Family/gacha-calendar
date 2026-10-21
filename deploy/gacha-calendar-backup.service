@@ -1,0 +1,19 @@
+[Unit]
+Description=gacha-calendar — daily SQLite snapshot via VACUUM INTO
+After=gacha-calendar.service
+
+[Service]
+Type=oneshot
+User=gacha
+Group=gacha
+EnvironmentFile=/etc/gacha-calendar/gacha-calendar.env
+# Snapshot first, then keep only the 14 most recent files.
+ExecStart=/bin/sh -c 'exec /opt/gacha-calendar/gacha-calendar backup "/var/lib/gacha-calendar/backups/gacha-$$(date +%%F).db"'
+ExecStartPost=/bin/sh -c 'ls -1t /var/lib/gacha-calendar/backups/gacha-*.db 2>/dev/null | tail -n +15 | xargs -r rm -f'
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/gacha-calendar
+UMask=0027

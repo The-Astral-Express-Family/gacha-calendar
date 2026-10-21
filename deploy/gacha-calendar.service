@@ -1,0 +1,47 @@
+[Unit]
+Description=gacha-calendar — 二游版本更新与前瞻直播时间表服务
+Documentation=https://github.com/The-Astral-Express-Family/gacha-calendar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gacha
+Group=gacha
+WorkingDirectory=/opt/gacha-calendar
+EnvironmentFile=/etc/gacha-calendar/gacha-calendar.env
+ExecStart=/opt/gacha-calendar/gacha-calendar
+Restart=on-failure
+RestartSec=5
+
+# --- hardening ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ReadWritePaths=/var/lib/gacha-calendar
+UMask=0027
+
+# journald logging (stdout/stderr captured, no log files)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gacha-calendar
+
+[Install]
+WantedBy=multi-user.target
