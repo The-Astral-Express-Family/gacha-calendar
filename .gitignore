@@ -30,3 +30,4 @@ deploy/*.key
 Thumbs.db
 .idea/
 .vscode/
+backend/bin/
