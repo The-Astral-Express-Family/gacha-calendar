@@ -8,7 +8,7 @@ const options = computed(() => tzOptions())
 
 <template>
   <label class="tz-switcher" title="切换展示时区；也可通过链接 ?tz= 分享">
-    <span class="tz-icon" aria-hidden>🌐</span>
+    <span class="tz-label">时区</span>
     <select :value="tzState.value" @change="setTz(($event.target as HTMLSelectElement).value)">
       <option v-for="option in options" :key="option.value" :value="option.value">
         {{ option.label }}
@@ -25,5 +25,19 @@ const options = computed(() => tzOptions())
   gap: 0.45rem;
   font-size: 0.82rem;
 }
-.tz-current { color: var(--text-faint); font-size: 0.72rem; white-space: nowrap; }
+.tz-label {
+  color: var(--text-faint);
+}
+.tz-current {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 760px) {
+  .tz-label,
+  .tz-current {
+    display: none;
+  }
+}
 </style>

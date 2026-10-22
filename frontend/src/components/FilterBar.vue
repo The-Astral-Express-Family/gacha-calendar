@@ -2,21 +2,15 @@
 import type { Game } from '@/lib/api'
 import { gameColor } from '@/lib/games'
 
-withDefaults(
-  defineProps<{
-    games: Game[]
-    selected: string[]
-    range: number
-    sort: 'time_asc' | 'time_desc'
-    showSort?: boolean
-  }>(),
-  { showSort: true },
-)
+defineProps<{
+  games: Game[]
+  selected: string[]
+  range: number
+}>()
 
 const emit = defineEmits<{
   (e: 'toggle-game', id: string): void
   (e: 'range', days: number): void
-  (e: 'sort', value: 'time_asc' | 'time_desc'): void
   (e: 'all-games'): void
 }>()
 
@@ -48,14 +42,8 @@ const RANGES: Array<{ value: number; label: string }> = [
       <label class="control">
         范围
         <select :value="range" @change="emit('range', Number(($event.target as HTMLSelectElement).value))">
+          <option v-if="range === 0" :value="0">自定义</option>
           <option v-for="option in RANGES" :key="option.value" :value="option.value">{{ option.label }}</option>
-        </select>
-      </label>
-      <label v-if="showSort" class="control">
-        排序
-        <select :value="sort" @change="emit('sort', ($event.target as HTMLSelectElement).value as 'time_asc' | 'time_desc')">
-          <option value="time_asc">时间 ↑</option>
-          <option value="time_desc">时间 ↓</option>
         </select>
       </label>
     </div>
@@ -69,9 +57,45 @@ const RANGES: Array<{ value: number; label: string }> = [
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  margin-bottom: 1rem;
+  margin-bottom: 0.9rem;
 }
-.chips { display: flex; gap: 0.45rem; flex-wrap: wrap; }
-.controls { display: flex; gap: 0.7rem; flex-wrap: wrap; }
-.control { display: inline-flex; gap: 0.4rem; align-items: center; font-size: 0.8rem; color: var(--text-dim); }
+.chips {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.controls {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+.control {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    width: 100%;
+    max-width: 100%;
+    padding-bottom: 0.3rem;
+    scrollbar-width: none;
+  }
+  .chips::-webkit-scrollbar {
+    display: none;
+  }
+  .controls {
+    justify-content: flex-end;
+  }
+}
 </style>

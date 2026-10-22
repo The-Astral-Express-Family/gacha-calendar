@@ -1,9 +1,14 @@
 <script setup lang="ts">
 // Month grid with event dots; day boundaries follow the selected display
-// timezone. Clicking a day emits a selection for the agenda filter.
-import { computed } from 'vue'
+// timezone. The displayed month is internal state (‹ › shift it by exactly
+// one month) and no longer derives from the selected day — that coupling made
+// the grid jump months when leading/trailing days were clicked. Clicking a
+// day only emits a selection for the agenda filter; picking a day from an
+// adjacent month also flips the view there.
+import { computed, ref, watch } from 'vue'
 
 import { gameColor } from '@/lib/games'
+import { nowUnix } from '@/stores/now'
 import { tzZone } from '@/stores/tz'
 import { dayKey, zoneDayStart, zoneOffsetSeconds } from '@/lib/time'
 
@@ -20,26 +25,36 @@ const props = defineProps<{
 
 const emit = defineEmits<{ (e: 'select', key: string | undefined): void }>()
 
-const nowKey = computed(() => dayKey(tzZone.value, Math.floor(Date.now() / 1000)))
+const todayKey = computed(() => dayKey(tzZone.value, nowUnix.value))
+
+// Displayed month as "YYYY-MM", decoupled from the selected day.
+const month = ref(todayKey.value.slice(0, 7))
+
+watch(tzZone, () => {
+  // keep "today" coherent when a zone switch moves the calendar day
+  if (!props.selectedKey) month.value = todayKey.value.slice(0, 7)
+})
+
+watch(
+  () => props.selectedKey,
+  (key) => {
+    if (key && key.slice(0, 7) !== month.value) month.value = key.slice(0, 7)
+  }
+)
 
 interface Cell {
   key: string
   day: number
   inMonth: boolean
   events: CalendarEvent[]
+  more: number
 }
 
 const cells = computed<Cell[]>(() => {
   const zone = tzZone.value
-  // Anchor on today (or the selected day's month) in the display zone.
-  const anchorUnix = props.selectedKey
-    ? zoneDayStart(zone, props.selectedKey)
-    : Math.floor(Date.now() / 1000)
-  const anchorKey = dayKey(zone, anchorUnix || Math.floor(Date.now() / 1000))
-  const [y, m] = anchorKey.split('-').map(Number)
+  const [y, m] = month.value.split('-').map(Number)
   const offset = zoneOffsetSeconds(zone, new Date())
   const firstUnix = Math.floor(Date.UTC(y, m - 1, 1) / 1000) - offset
-  // Weekday of the first of month in this zone.
   const firstKey = dayKey(zone, firstUnix)
   const firstDayUnix = zoneDayStart(zone, firstKey)
   const firstWeekday = new Date((firstDayUnix + offset) * 1000).getUTCDay()
@@ -57,46 +72,51 @@ const cells = computed<Cell[]>(() => {
   for (let i = 0; i < 42; i += 1) {
     const unix = gridStart + i * 86400
     const key = dayKey(zone, unix)
-    const day = Number(key.slice(8))
+    const all = byKey.get(key) ?? []
     out.push({
       key,
-      day,
-      inMonth: key.startsWith(`${y}-${String(m).padStart(2, '0')}`),
-      events: (byKey.get(key) ?? []).slice(0, 4),
+      day: Number(key.slice(8)),
+      inMonth: key.startsWith(month.value),
+      events: all.slice(0, 4),
+      more: Math.max(all.length - 4, 0),
     })
   }
   return out
 })
 
 const monthTitle = computed(() => {
-  const zone = tzZone.value
-  const anchorUnix = props.selectedKey
-    ? zoneDayStart(zone, props.selectedKey)
-    : Math.floor(Date.now() / 1000)
-  return new Intl.DateTimeFormat('zh-CN', { timeZone: zone, year: 'numeric', month: 'long' })
-    .format(new Date((anchorUnix || Math.floor(Date.now() / 1000)) * 1000))
+  const [y, m] = month.value.split('-').map(Number)
+  return `${y}年${m}月`
 })
 
 function shiftMonth(delta: number) {
-  const zone = tzZone.value
-  const anchorKey = props.selectedKey ?? nowKey.value
-  const anchorUnix = zoneDayStart(zone, anchorKey) || Math.floor(Date.now() / 1000)
-  const shifted = new Date((anchorUnix + delta * 31 * 86400) * 1000)
-  const key = dayKey(zone, Math.floor(shifted.getTime() / 1000))
-  const [y, m] = key.split('-').map(Number)
-  const target = new Date(Date.UTC(y, m - 1 + delta, 1))
-  const offset = zoneOffsetSeconds(zone, target)
-  const unix = Math.floor(target.getTime() / 1000) - offset
-  emit('select', dayKey(zone, unix))
+  const [y, m] = month.value.split('-').map(Number)
+  const total = y * 12 + (m - 1) + delta
+  const nextY = Math.floor(total / 12)
+  const nextM = (total % 12) + 1
+  month.value = `${nextY}-${String(nextM).padStart(2, '0')}`
+}
+
+function goToday() {
+  month.value = todayKey.value.slice(0, 7)
+}
+
+function pick(cell: Cell) {
+  emit('select', cell.key === props.selectedKey ? undefined : cell.key)
 }
 </script>
 
 <template>
   <div class="calendar">
     <div class="cal-head">
-      <button class="mini" @click="shiftMonth(-1)">‹</button>
-      <span class="cal-title">{{ monthTitle }}<span class="faint">（{{ tzZone }}）</span></span>
-      <button class="mini" @click="shiftMonth(1)">›</button>
+      <button class="mini" title="上个月" aria-label="上个月" @click="shiftMonth(-1)">‹</button>
+      <span class="cal-title"
+        >{{ monthTitle }}<span class="faint">（{{ tzZone }}）</span></span
+      >
+      <span class="cal-nav">
+        <button class="mini" title="回到当前月份" @click="goToday">今</button>
+        <button class="mini" title="下个月" aria-label="下个月" @click="shiftMonth(1)">›</button>
+      </span>
     </div>
     <div class="cal-grid">
       <div v-for="name in ['日', '一', '二', '三', '四', '五', '六']" :key="name" class="cal-weekday">{{ name }}</div>
@@ -106,10 +126,10 @@ function shiftMonth(delta: number) {
         class="cal-cell"
         :class="{
           dim: !cell.inMonth,
-          today: cell.key === nowKey,
+          today: cell.key === todayKey,
           selected: cell.key === selectedKey,
         }"
-        @click="emit('select', cell.key === selectedKey ? undefined : cell.key)"
+        @click="pick(cell)"
       >
         <span class="cal-day">{{ cell.day }}</span>
         <span class="cal-dots">
@@ -131,34 +151,108 @@ function shiftMonth(delta: number) {
 </template>
 
 <style scoped>
-.calendar { display: flex; flex-direction: column; gap: 0.6rem; }
-.cal-head { display: flex; align-items: center; justify-content: space-between; }
-.cal-title { font-weight: 650; font-size: 0.95rem; }
-button.mini { padding: 0.15rem 0.55rem; }
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
-.cal-weekday { text-align: center; font-size: 0.7rem; color: var(--text-faint); padding: 0.15rem 0; }
+.calendar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.cal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+.cal-title {
+  font-weight: 650;
+  font-size: 0.95rem;
+  white-space: nowrap;
+}
+.cal-nav {
+  display: inline-flex;
+  gap: 0.35rem;
+}
+button.mini {
+  padding: 0.15rem 0.5rem;
+  min-width: 1.9rem;
+}
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+.cal-weekday {
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--text-faint);
+  padding: 0.15rem 0;
+}
 .cal-cell {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: 2px;
-  padding: 0.3rem 0 0.25rem;
-  min-height: 44px;
-  border-radius: 9px;
+  gap: 3px;
+  padding: 0.28rem 0 0.24rem;
+  min-height: 42px;
+  border-radius: 5px;
   background: transparent;
   border: 1px solid transparent;
 }
-.cal-cell:hover { background: rgba(255, 255, 255, 0.06); }
-.cal-cell.dim .cal-day { color: var(--text-faint); opacity: 0.55; }
-.cal-cell.today { border-color: rgba(248, 113, 113, 0.55); }
-.cal-cell.selected { background: var(--accent-soft); border-color: var(--accent); }
-.cal-day { font-size: 0.8rem; }
-.cal-dots { display: flex; gap: 3px; height: 7px; }
-.cal-dots i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-.cal-dots i.update { border-radius: 1.5px; transform: rotate(45deg); }
-.cal-legend { display: flex; gap: 0.9rem; align-items: center; }
-.cal-legend i { width: 8px; height: 8px; display: inline-block; border-radius: 50%; margin-right: 4px; vertical-align: -1px; background: var(--text-dim); }
-.cal-legend i.dot-update { border-radius: 1.5px; transform: rotate(45deg); }
+.cal-cell:hover {
+  background: rgba(151, 163, 189, 0.09);
+}
+.cal-cell.dim .cal-day {
+  color: var(--text-faint);
+  opacity: 0.5;
+}
+.cal-cell.today {
+  border-color: color-mix(in srgb, var(--now) 55%, transparent);
+}
+.cal-cell.today .cal-day {
+  color: var(--now);
+  font-weight: 650;
+}
+.cal-cell.selected {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.cal-day {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+.cal-dots {
+  display: flex;
+  gap: 3px;
+  height: 7px;
+}
+.cal-dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.cal-dots i.update {
+  border-radius: 1.5px;
+  transform: rotate(45deg);
+}
+.cal-legend {
+  display: flex;
+  gap: 0.9rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.cal-legend i {
+  width: 8px;
+  height: 8px;
+  display: inline-block;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: -1px;
+  background: var(--text-dim);
+}
+.cal-legend i.dot-update {
+  border-radius: 1.5px;
+  transform: rotate(45deg);
+}
 </style>

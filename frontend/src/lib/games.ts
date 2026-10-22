@@ -14,6 +14,20 @@ export function gameColor(id: string): string {
   return GAME_COLORS[id] ?? '#818cf8'
 }
 
+// Short lane labels for the timeline gutter (full names don't fit on mobile).
+export const SHORT_NAMES: Record<string, string> = {
+  genshin: '原神',
+  hsr: '星铁',
+  zzz: '绝区零',
+  wuwa: '鸣潮',
+  endfield: '终末地',
+  nte: '异环',
+}
+
+export function shortName(game: { id: string; name: string }): string {
+  return SHORT_NAMES[game.id] ?? game.name
+}
+
 export const CONFIDENCE_LABELS: Record<string, string> = {
   official: '官方',
   inferred: '推算',
@@ -28,10 +42,14 @@ export function confidenceLabel(value?: string): string {
 
 export function confidenceClass(value?: string): string {
   switch (value) {
-    case 'official': return 'badge-official'
-    case 'agent': return 'badge-agent'
-    case 'none': return 'badge-none'
-    default: return 'badge-inferred'
+    case 'official':
+      return 'badge-official'
+    case 'agent':
+      return 'badge-agent'
+    case 'none':
+      return 'badge-none'
+    default:
+      return 'badge-inferred'
   }
 }
 
