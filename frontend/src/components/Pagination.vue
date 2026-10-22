@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import UiIcon from '@/components/UiIcon.vue'
 import type { Pagination } from '@/lib/api'
 
 const props = defineProps<{ pagination: Pagination }>()
@@ -31,17 +32,33 @@ function jump(target: number) {
 </script>
 
 <template>
-  <div class="pagination">
-    <span class="faint"> 共 {{ pagination.total }} 条 · 第 {{ pagination.page }}/{{ pagination.total_pages }} 页 </span>
+  <nav v-if="pagination.total_pages > 1" class="pagination" aria-label="公告分页">
+    <span class="faint">{{ pagination.total }} 条公告</span>
     <div class="pages">
-      <button :disabled="pagination.page <= 1" @click="jump(pagination.page - 1)">‹</button>
+      <button :disabled="pagination.page <= 1" aria-label="上一页" @click="jump(pagination.page - 1)">
+        <UiIcon name="chevron" :size="14" class="previous" />
+      </button>
       <template v-for="(page, index) in pages" :key="`${page}-${index}`">
         <span v-if="page === '…'" class="faint">…</span>
-        <button v-else :class="{ active: page === pagination.page }" @click="jump(page)">{{ page }}</button>
+        <button
+          v-else
+          :class="{ active: page === pagination.page }"
+          :aria-label="`第 ${page} 页`"
+          :aria-current="page === pagination.page ? 'page' : undefined"
+          @click="jump(page)"
+        >
+          {{ page }}
+        </button>
       </template>
-      <button :disabled="pagination.page >= pagination.total_pages" @click="jump(pagination.page + 1)">›</button>
+      <button
+        :disabled="pagination.page >= pagination.total_pages"
+        aria-label="下一页"
+        @click="jump(pagination.page + 1)"
+      >
+        <UiIcon name="chevron" :size="14" />
+      </button>
     </div>
-  </div>
+  </nav>
 </template>
 
 <style scoped>
@@ -51,7 +68,9 @@ function jump(target: number) {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  margin-top: 0.9rem;
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
 }
 .pages {
   display: flex;
@@ -59,8 +78,14 @@ function jump(target: number) {
   align-items: center;
 }
 .pages button {
-  min-width: 2rem;
-  padding: 0.28rem 0.5rem;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 12px;
+  background: transparent;
+}
+.previous {
+  transform: rotate(180deg);
 }
 .pages button.active {
   background: var(--accent-soft);

@@ -7,6 +7,7 @@
 // adjacent month also flips the view there.
 import { computed, ref, watch } from 'vue'
 
+import UiIcon from '@/components/UiIcon.vue'
 import { gameColor } from '@/lib/games'
 import { nowUnix } from '@/stores/now'
 import { tzZone } from '@/stores/tz'
@@ -86,7 +87,7 @@ const cells = computed<Cell[]>(() => {
 
 const monthTitle = computed(() => {
   const [y, m] = month.value.split('-').map(Number)
-  return `${y}年${m}月`
+  return `${y} / ${String(m).padStart(2, '0')}`
 })
 
 function shiftMonth(delta: number) {
@@ -102,6 +103,7 @@ function goToday() {
 }
 
 function pick(cell: Cell) {
+  if (!cell.inMonth) month.value = cell.key.slice(0, 7)
   emit('select', cell.key === props.selectedKey ? undefined : cell.key)
 }
 </script>
@@ -109,13 +111,15 @@ function pick(cell: Cell) {
 <template>
   <div class="calendar">
     <div class="cal-head">
-      <button class="mini" title="上个月" aria-label="上个月" @click="shiftMonth(-1)">‹</button>
-      <span class="cal-title"
-        >{{ monthTitle }}<span class="faint">（{{ tzZone }}）</span></span
-      >
+      <span class="cal-title">{{ monthTitle }}</span>
       <span class="cal-nav">
-        <button class="mini" title="回到当前月份" @click="goToday">今</button>
-        <button class="mini" title="下个月" aria-label="下个月" @click="shiftMonth(1)">›</button>
+        <button class="mini previous" title="上个月" aria-label="上个月" @click="shiftMonth(-1)">
+          <UiIcon name="chevron" :size="13" />
+        </button>
+        <button class="mini" title="回到当前月份" aria-label="回到当前月份" @click="goToday">今</button>
+        <button class="mini" title="下个月" aria-label="下个月" @click="shiftMonth(1)">
+          <UiIcon name="chevron" :size="13" />
+        </button>
       </span>
     </div>
     <div class="cal-grid">
@@ -129,6 +133,8 @@ function pick(cell: Cell) {
           today: cell.key === todayKey,
           selected: cell.key === selectedKey,
         }"
+        :aria-label="`${cell.key}${cell.key === todayKey ? ' 今天' : ''}，${cell.events.length + cell.more} 场事件`"
+        :aria-pressed="cell.key === selectedKey"
         @click="pick(cell)"
       >
         <span class="cal-day">{{ cell.day }}</span>
@@ -139,13 +145,13 @@ function pick(cell: Cell) {
             :class="event.kind"
             :style="{ background: gameColor(event.gameId) }"
           />
+          <span v-if="cell.more" class="cal-more">+{{ cell.more }}</span>
         </span>
       </button>
     </div>
     <div class="cal-legend faint">
       <span><i class="dot-preview" /> 前瞻</span>
       <span><i class="dot-update" /> 更新</span>
-      <span>点击日期筛选下方列表</span>
     </div>
   </div>
 </template>
@@ -154,7 +160,7 @@ function pick(cell: Cell) {
 .calendar {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 20px;
 }
 .cal-head {
   display: flex;
@@ -163,8 +169,9 @@ function pick(cell: Cell) {
   gap: 0.4rem;
 }
 .cal-title {
-  font-weight: 650;
-  font-size: 0.95rem;
+  font-weight: 500;
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .cal-nav {
@@ -172,8 +179,15 @@ function pick(cell: Cell) {
   gap: 0.35rem;
 }
 button.mini {
-  padding: 0.15rem 0.5rem;
-  min-width: 1.9rem;
+  padding: 0;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.previous svg {
+  transform: rotate(180deg);
 }
 .cal-grid {
   display: grid;
@@ -194,7 +208,7 @@ button.mini {
   justify-content: flex-start;
   gap: 3px;
   padding: 0.28rem 0 0.24rem;
-  min-height: 42px;
+  min-height: 44px;
   border-radius: 5px;
   background: transparent;
   border: 1px solid transparent;
@@ -207,7 +221,7 @@ button.mini {
   opacity: 0.5;
 }
 .cal-cell.today {
-  border-color: color-mix(in srgb, var(--now) 55%, transparent);
+  background: #ff8d880c;
 }
 .cal-cell.today .cal-day {
   color: var(--now);
@@ -227,10 +241,15 @@ button.mini {
   height: 7px;
 }
 .cal-dots i {
-  width: 7px;
-  height: 7px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
   display: inline-block;
+}
+.cal-more {
+  font-size: 8px;
+  line-height: 1;
+  color: var(--text-dim);
 }
 .cal-dots i.update {
   border-radius: 1.5px;
@@ -241,6 +260,9 @@ button.mini {
   gap: 0.9rem;
   align-items: center;
   flex-wrap: wrap;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
 }
 .cal-legend i {
   width: 8px;

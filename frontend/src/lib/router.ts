@@ -20,7 +20,7 @@ export function navigate(name: RouteName) {
   const route = routes.find((item) => item.name === name)
   if (!route || routeState.name === name) return
   routeState.name = name
-  window.history.pushState(null, '', route.path)
+  window.history.pushState(null, '', route.path + window.location.search)
   window.scrollTo({ top: 0 })
 }
 

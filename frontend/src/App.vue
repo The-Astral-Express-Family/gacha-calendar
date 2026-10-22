@@ -1,169 +1,263 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import TzSwitcher from '@/components/TzSwitcher.vue'
+import UiIcon from '@/components/UiIcon.vue'
 import DashboardView from '@/views/DashboardView.vue'
 import PostsView from '@/views/PostsView.vue'
 import type { Meta } from '@/lib/api'
 import { fetchMeta } from '@/lib/api'
 import { navigate, routeState } from '@/lib/router'
-import { tzOffset, tzZone } from '@/stores/tz'
+import { tzOffset, tzState, tzZone } from '@/stores/tz'
 import { formatDateTime } from '@/lib/time'
 
 const meta = ref<Meta | null>(null)
 const shareHint = ref('')
-
+let shareTimer: ReturnType<typeof setTimeout> | undefined
 onMounted(async () => {
   try {
     meta.value = await fetchMeta()
   } catch {
-    /* meta is decorative; the page still works */
+    /* Schedule requests have their own visible error state. */
   }
 })
-
+onBeforeUnmount(() => clearTimeout(shareTimer))
 const lastCycleText = computed(() => {
-  if (!meta.value?.refresh.last_cycle_at) return '尚未采集'
+  if (!meta.value?.refresh.last_cycle_at) return ''
   return formatDateTime(tzZone.value, Date.parse(meta.value.refresh.last_cycle_at) / 1000)
 })
-
 async function share() {
   const url = new URL(window.location.href)
-  url.searchParams.set('tz', String(localStorage.getItem('gacha-calendar.tz') ?? 'local'))
+  url.searchParams.set('tz', tzState.value)
   try {
     await navigator.clipboard.writeText(url.toString())
-    shareHint.value = '链接已复制（含时区设置）'
+    shareHint.value = '链接已复制'
   } catch {
     shareHint.value = url.toString()
   }
-  setTimeout(() => {
+  clearTimeout(shareTimer)
+  shareTimer = setTimeout(() => {
     shareHint.value = ''
-  }, 2500)
+  }, 4000)
 }
 </script>
 
 <template>
+  <a class="skip-link" href="#main">跳至内容</a>
   <header class="topbar">
     <div class="page topbar-inner">
-      <div class="brand" @click="navigate('dashboard')">
-        <img src="/favicon.svg" alt="" class="logo" />
-        <div>
-          <div class="brand-name">二游版本日历</div>
-          <div class="brand-sub">gacha-calendar · 更新与前瞻时间预测</div>
-        </div>
-      </div>
-      <nav class="tabs">
-        <button :class="{ active: routeState.name === 'dashboard' }" @click="navigate('dashboard')">时间线</button>
-        <button :class="{ active: routeState.name === 'posts' }" @click="navigate('posts')">官方公告</button>
-        <TzSwitcher />
-        <button class="ghost" title="复制带时区参数的链接" @click="share">分享</button>
+      <a class="brand" href="/" @click.prevent="navigate('dashboard')" aria-label="二游日历首页">
+        <span class="brand-mark"><UiIcon name="calendar" :size="23" /></span>
+        <span class="brand-name">二游<span>日历</span></span>
+      </a>
+      <nav class="tabs" aria-label="主导航">
+        <a
+          href="/"
+          :class="{ active: routeState.name === 'dashboard' }"
+          :aria-current="routeState.name === 'dashboard' ? 'page' : undefined"
+          @click.prevent="navigate('dashboard')"
+          ><UiIcon name="timeline" :size="17" />版本日程</a
+        >
+        <a
+          href="/posts"
+          :class="{ active: routeState.name === 'posts' }"
+          :aria-current="routeState.name === 'posts' ? 'page' : undefined"
+          @click.prevent="navigate('posts')"
+          ><UiIcon name="grid" :size="16" />官方公告</a
+        >
       </nav>
+      <div class="topbar-actions">
+        <TzSwitcher />
+        <button class="icon-button share-button" title="复制分享链接" aria-label="复制分享链接" @click="share">
+          <UiIcon name="share" :size="17" />
+        </button>
+      </div>
     </div>
-    <div v-if="shareHint" class="page share-hint">{{ shareHint }}</div>
+    <div v-if="shareHint" class="share-hint" role="status">{{ shareHint }}</div>
   </header>
-
-  <main class="page">
-    <DashboardView v-if="routeState.name === 'dashboard'" :meta="meta" :last-cycle-text="lastCycleText" />
+  <main id="main" class="page">
+    <DashboardView v-if="routeState.name === 'dashboard'" />
     <PostsView v-else />
   </main>
-
   <footer class="page footer">
-    <template v-if="meta">
-      <span class="foot-long"
-        >口径：{{ meta.timezone.business }}（{{ meta.timezone.utc_offset }}），数据均为 UTC
-        存储/返回，页面按所选时区渲染</span
+    <span>二游日历</span>
+    <div class="footer-meta">
+      <span v-if="lastCycleText" :title="`上次采集 ${lastCycleText}`" class="sync-status"
+        ><i :class="{ warning: meta?.refresh.last_cycle_ok !== meta?.refresh.last_cycle_all }" />{{
+          lastCycleText
+        }}
+        更新</span
       >
-      <span>当前视图 {{ tzZone }}（{{ tzOffset }}）</span>
-      <span>上次采集：{{ lastCycleText }} · {{ meta.version }}</span>
-    </template>
-    <template v-else>gacha-calendar</template>
+      <span :title="tzZone">{{ tzOffset }}</span>
+    </div>
   </footer>
 </template>
 
 <style scoped>
+.skip-link {
+  position: fixed;
+  top: -60px;
+  left: 20px;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: var(--bg);
+  z-index: 100;
+}
+.skip-link:focus {
+  top: 10px;
+}
 .topbar {
   position: sticky;
   top: 0;
   z-index: 30;
-  backdrop-filter: blur(16px);
-  background: rgba(11, 17, 30, 0.82);
+  background: #14181eef;
+  backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--border);
 }
 .topbar-inner {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.8rem;
-  padding: 0.6rem 0;
-  flex-wrap: wrap;
+  gap: 56px;
+  min-height: 78px;
 }
 .brand {
-  display: flex;
-  gap: 0.65rem;
+  display: inline-flex;
   align-items: center;
-  cursor: pointer;
-  min-width: 0;
-}
-.logo {
-  width: 32px;
-  height: 32px;
+  gap: 11px;
+  color: var(--text);
   flex-shrink: 0;
 }
-.brand-name {
-  font-weight: 700;
-  white-space: nowrap;
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 37px;
+  height: 40px;
+  color: var(--accent);
+  border: 1px solid #a9d5f53b;
+  border-radius: 10px 10px 10px 3px;
 }
-.brand-sub {
-  font-size: 0.72rem;
-  color: var(--text-faint);
-  white-space: nowrap;
+.brand-name {
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+}
+.brand-name > span {
+  color: var(--text-dim);
+  font-weight: 400;
 }
 .tabs {
   display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  flex-wrap: wrap;
+  align-self: stretch;
+  gap: 32px;
 }
-.tabs button.active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
+.tabs a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+.tabs a.active {
   color: var(--text);
 }
-.tabs button.ghost {
-  color: var(--text-dim);
+.tabs a.active::after {
+  position: absolute;
+  content: '';
+  height: 2px;
+  background: var(--accent);
+  inset: auto 0 -1px;
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
 }
 .share-hint {
-  padding: 0.2rem 0 0.5rem;
-  font-size: 0.78rem;
-  color: var(--official);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  position: absolute;
+  right: 24px;
+  top: calc(100% + 10px);
+  max-width: min(90vw, 500px);
+  overflow-wrap: anywhere;
+  padding: 12px 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-strong);
+  box-shadow: 0 12px 30px #0004;
+  font-size: 13px;
 }
 .footer {
   display: flex;
-  gap: 1.4rem;
-  flex-wrap: wrap;
-  padding: 1.1rem 0 1.4rem;
-  font-size: 0.74rem;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding-block: 25px;
+  border-top: 1px solid var(--border);
   color: var(--text-faint);
+  font-size: 11px;
 }
-@media (max-width: 760px) {
-  .brand-sub {
-    display: none;
+.footer-meta,
+.sync-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.footer-meta {
+  gap: 22px;
+}
+.sync-status i {
+  height: 5px;
+  width: 5px;
+  background: var(--official);
+  border-radius: 50%;
+}
+.sync-status i.warning {
+  background: var(--inferred);
+}
+@media (max-width: 850px) {
+  .topbar-inner {
+    gap: 28px;
   }
   .tabs {
-    width: 100%;
-    justify-content: space-between;
+    gap: 24px;
   }
-  .tabs button {
-    padding: 0.4rem 0.9rem;
+}
+@media (max-width: 640px) {
+  .topbar-inner {
+    flex-wrap: wrap;
+    gap: 0;
+    padding-top: 15px;
+    min-height: auto;
+  }
+  .brand-name {
+    font-size: 19px;
+  }
+  .brand-mark {
+    width: 30px;
+    height: 32px;
+  }
+  .topbar-actions {
+    gap: 8px;
+  }
+  .tabs {
+    order: 3;
+    width: 100%;
+    height: 48px;
+    gap: 30px;
+    margin-top: 5px;
+  }
+  .tabs a {
+    font-size: 12px;
+  }
+  .share-button {
+    border: 0;
+    width: 30px;
   }
   .footer {
-    gap: 0.5rem 1rem;
+    align-items: flex-start;
     flex-direction: column;
-  }
-  .foot-long {
-    display: none;
+    gap: 10px;
+    padding-block: 20px;
   }
 }
 </style>

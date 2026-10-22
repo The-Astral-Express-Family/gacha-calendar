@@ -1,191 +1,291 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-
 import ConfidenceBadge from '@/components/ConfidenceBadge.vue'
 import CoverImage from '@/components/CoverImage.vue'
+import UiIcon from '@/components/UiIcon.vue'
 import type { Game } from '@/lib/api'
 import { gameColor } from '@/lib/games'
-import { nowUnix } from '@/stores/now'
 import { tzZone } from '@/stores/tz'
-import { BUSINESS_TZ, formatShort, formatTime, relativeTime } from '@/lib/time'
+import { formatDateShort, formatTime, formatDateTime } from '@/lib/time'
 
 const props = defineProps<{ game: Game }>()
-
-const update = computed(() => props.game.prediction?.update)
-const preview = computed(() => props.game.prediction?.preview)
-const isPhase = computed(() => props.game.prediction?.is_phase_update ?? false)
-
-const previewPlaceholder = computed(() => (isPhase.value ? '阶段内容更新，无前瞻直播' : '暂无预测'))
-
-const countdownTarget = computed(() => {
-  const candidates = [update.value, preview.value]
-    .filter((item): item is NonNullable<typeof item> => Boolean(item))
-    .sort((a, b) => a.unix_seconds - b.unix_seconds)
-  const upcoming = candidates.find((item) => item.unix_seconds >= nowUnix.value)
-  return upcoming ?? candidates[0]
-})
-
-const statusText = computed(() => {
-  switch (props.game.status) {
-    case 'ok':
-      return '正常'
-    case 'partial':
-      return '部分失败'
-    case 'error':
-      return '采集异常'
-    default:
-      return props.game.status
-  }
-})
+const events = computed(() => [
+  {
+    kind: 'preview',
+    label: '前瞻直播',
+    time: props.game.prediction?.preview,
+    confidence: props.game.prediction?.preview_confidence,
+    evidence: props.game.prediction?.preview_evidence,
+  },
+  {
+    kind: 'update',
+    label: props.game.prediction?.is_phase_update ? '阶段更新' : '版本更新',
+    time: props.game.prediction?.update,
+    confidence: props.game.prediction?.update_confidence,
+    evidence: props.game.prediction?.update_evidence,
+  },
+])
+const statusText = computed(() =>
+  props.game.status === 'error' ? '采集异常' : props.game.status === 'partial' ? '部分采集失败' : '数据已同步'
+)
 </script>
 
 <template>
-  <article class="game-card panel" :style="{ '--game': gameColor(game.id) }">
-    <div class="cover-wrap">
+  <article class="game-card" :style="{ '--game': gameColor(game.id) }">
+    <div class="game-visual">
       <CoverImage :src="game.cover" :fallback="game.fallback" :alt="`${game.name} 主视觉`" />
-      <div class="cover-shade" />
-      <div class="cover-title">
-        <span class="game-name">{{ game.name }}</span>
-        <span v-if="game.prediction?.version" class="version">v{{ game.prediction.version }}</span>
+      <div class="visual-shade" />
+      <span v-if="game.prediction?.version" class="version-tag">{{ game.prediction.version }}</span>
+      <a
+        :href="game.bilibili_space"
+        target="_blank"
+        rel="noreferrer"
+        class="official-link"
+        :aria-label="`${game.name} B站官方账号`"
+        title="B站官方账号"
+        ><UiIcon name="arrow" :size="18"
+      /></a>
+      <div class="visual-title">
+        <span v-if="game.prediction?.version_name" class="version-name">{{ game.prediction.version_name }}</span>
+        <h3>{{ game.name }}</h3>
       </div>
-      <span class="status" :class="game.status" :title="game.last_error || ''">{{ statusText }}</span>
     </div>
-    <div class="body">
-      <div class="event preview">
-        <span class="label">前瞻直播</span>
-        <template v-if="preview">
-          <span class="when">{{ formatShort(tzZone, preview.unix_seconds) }}</span>
-          <span class="meta">
-            {{ formatTime(BUSINESS_TZ, preview.unix_seconds) }} 国服 · {{ relativeTime(preview.unix_seconds, nowUnix) }}
-          </span>
+    <div class="game-schedule">
+      <div v-for="event in events" :key="event.kind" class="schedule-row">
+        <span class="event-label"><UiIcon :name="event.kind" :size="14" />{{ event.label }}</span>
+        <template v-if="event.time">
+          <time :datetime="event.time.utc" :title="formatDateTime(tzZone, event.time.unix_seconds)"
+            >{{ formatDateShort(tzZone, event.time.unix_seconds)
+            }}<span>{{ formatTime(tzZone, event.time.unix_seconds) }}</span></time
+          >
+          <ConfidenceBadge :value="event.confidence" />
         </template>
-        <span v-else class="meta" :title="game.prediction?.preview_evidence || ''">{{ previewPlaceholder }}</span>
-        <ConfidenceBadge :value="game.prediction?.preview_confidence" />
+        <span v-else class="pending">{{
+          event.kind === 'preview' && game.prediction?.is_phase_update ? '本阶段无前瞻' : '待公布'
+        }}</span>
       </div>
-      <div class="event update">
-        <span class="label">{{ isPhase ? '阶段更新' : '版本更新' }}</span>
-        <template v-if="update">
-          <span class="when">{{ formatShort(tzZone, update.unix_seconds) }}</span>
-          <span class="meta">
-            {{ formatTime(BUSINESS_TZ, update.unix_seconds) }} 国服 · {{ relativeTime(update.unix_seconds, nowUnix) }}
-          </span>
-        </template>
-        <span v-else class="meta">暂无预测</span>
-        <ConfidenceBadge :value="game.prediction?.update_confidence" />
-      </div>
-      <div class="foot">
-        <a :href="game.bilibili_space" target="_blank" rel="noreferrer">B 站官号 ↗</a>
-        <span v-if="countdownTarget" class="countdown" :title="countdownTarget.utc">
-          距最近事件 {{ relativeTime(countdownTarget.unix_seconds, nowUnix) }}
-        </span>
-      </div>
+    </div>
+    <div class="card-bottom">
+      <span
+        class="collection-state"
+        :class="{ warning: game.status !== 'ok' }"
+        :title="game.last_error || statusText"
+        :aria-label="statusText"
+        ><i /><span v-if="game.status !== 'ok'">{{ statusText }}</span></span
+      >
+      <details v-if="game.prediction" class="evidence">
+        <summary title="查看时间依据">时间依据<UiIcon name="info" :size="12" /></summary>
+        <div class="evidence-content">
+          <p v-for="event in events.filter((item) => item.evidence)" :key="event.kind">
+            <strong>{{ event.label }}</strong
+            >{{ event.evidence }}
+          </p>
+          <a
+            v-if="game.prediction.announcement_url"
+            :href="game.prediction.announcement_url"
+            target="_blank"
+            rel="noreferrer"
+            >查看原始公告 <UiIcon name="arrow" :size="12"
+          /></a>
+        </div>
+      </details>
     </div>
   </article>
 </template>
 
 <style scoped>
 .game-card {
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  border-color: color-mix(in srgb, var(--game) 30%, transparent);
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
 }
-.cover-wrap {
+.game-visual {
   position: relative;
-  aspect-ratio: 16 / 8.2;
+  aspect-ratio: 16 / 10;
   overflow: hidden;
+  border-radius: 11px 11px 0 0;
+  background: var(--bg-soft);
 }
-.cover-wrap img {
+.game-visual > img {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  display: block;
 }
-.cover-shade {
+.visual-shade {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(11, 17, 30, 0.05) 30%, rgba(11, 17, 30, 0.85));
+  background: linear-gradient(180deg, #080c1833, transparent 36%, #080c18c9);
+  pointer-events: none;
 }
-.cover-title {
+.version-tag {
   position: absolute;
-  left: 0.9rem;
-  bottom: 0.7rem;
-  display: flex;
-  align-items: baseline;
-  gap: 0.55rem;
-  min-width: 0;
+  top: 15px;
+  left: 16px;
+  padding: 3px 10px;
+  border: 1px solid #ffffff3b;
+  border-radius: 5px;
+  background: #0b10185e;
+  color: #fff;
+  backdrop-filter: blur(12px);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
 }
-.game-name {
-  font-weight: 750;
-  font-size: 1.06rem;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
-}
-.version {
-  font-size: 0.8rem;
-  color: #fff9;
-  font-family: var(--mono);
-}
-.status {
+.official-link {
   position: absolute;
-  top: 0.55rem;
-  right: 0.55rem;
-  font-size: 0.68rem;
-  padding: 0.08rem 0.45rem;
-  border-radius: var(--radius-tag);
-  background: rgba(2, 6, 23, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  right: 13px;
+  top: 13px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #ffffff33;
+  border-radius: 50%;
+  color: #fff;
+  background: #0b101859;
+  backdrop-filter: blur(12px);
 }
-.status.ok {
-  color: var(--official);
-  border-color: rgba(52, 211, 153, 0.4);
+.official-link:hover {
+  background: #0b1018b3;
 }
-.status.partial {
-  color: var(--inferred);
-  border-color: rgba(251, 191, 36, 0.4);
+.visual-title {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  bottom: 19px;
 }
-.status.error {
-  color: var(--danger);
-  border-color: rgba(248, 113, 113, 0.4);
+.visual-title h3 {
+  margin: 3px 0 0;
+  color: #fff;
+  font-size: clamp(18px, 1.7vw, 24px);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-shadow: 0 2px 15px #0008;
 }
-.body {
-  padding: 0.85rem 0.95rem 0.9rem;
+.version-name {
+  display: block;
+  color: #ffffffe0;
+  font-size: 11px;
+}
+.game-schedule {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 15px;
+  padding: 20px 18px 16px;
 }
-.event {
-  display: grid;
-  grid-template-columns: 4.2rem 1fr auto;
-  align-items: baseline;
-  gap: 0.4rem;
+.schedule-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
 }
-.label {
-  font-size: 0.74rem;
+.event-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.event-label > svg {
+  color: var(--game);
+}
+.schedule-row time {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 9px;
+  font-size: 15px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.schedule-row time span {
+  font-size: 12px;
+  color: var(--text-dim);
+  align-self: center;
+}
+.pending {
+  margin-left: auto;
+  font-size: 12px;
   color: var(--text-faint);
 }
-.when {
-  font-weight: 650;
-  font-size: 0.94rem;
-  font-variant-numeric: tabular-nums;
-}
-.meta {
-  grid-column: 2 / 4;
-  font-size: 0.74rem;
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
-}
-.foot {
+.card-bottom {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 0.5rem;
+  justify-content: space-between;
+  margin: 0 18px;
+  padding: 11px 0;
   border-top: 1px solid var(--border);
-  padding-top: 0.55rem;
-  margin-top: 0.15rem;
-  font-size: 0.78rem;
+  font-size: 10px;
+  color: var(--text-faint);
 }
-.countdown {
+.collection-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.collection-state i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--official);
+}
+.collection-state.warning {
+  color: var(--inferred);
+}
+.collection-state.warning i {
+  background: var(--inferred);
+}
+.evidence {
+  position: relative;
+}
+.evidence summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  cursor: pointer;
+  padding: 3px 0;
+}
+.evidence summary::-webkit-details-marker {
+  display: none;
+}
+.evidence[open] summary {
+  color: var(--accent);
+}
+.evidence-content {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 12px);
+  z-index: 10;
+  width: min(300px, 78vw);
+  padding: 16px;
+  background: #252d38;
+  border: 1px solid #4c596b;
+  border-radius: 9px;
+  box-shadow: 0 10px 30px #0006;
   color: var(--text-dim);
-  text-align: right;
+  font-size: 12px;
+}
+.evidence-content p {
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+.evidence-content strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text);
+  font-weight: 500;
+}
+@media (max-width: 640px) {
+  .game-visual {
+    aspect-ratio: 16 / 10;
+  }
+  .visual-title h3 {
+    font-size: 23px;
+  }
+  .game-schedule {
+    padding-block: 18px;
+  }
 }
 </style>

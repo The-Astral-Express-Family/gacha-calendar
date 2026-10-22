@@ -1,43 +1,47 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-
+import UiIcon from '@/components/UiIcon.vue'
 import { setTz, tzOptions, tzState, tzZone, tzOffset } from '@/stores/tz'
-
 const options = computed(() => tzOptions())
+const label = computed(() => {
+  if (tzZone.value === 'Asia/Shanghai') return '国服时间'
+  if (tzZone.value === 'UTC') return 'UTC'
+  return tzZone.value.split('/').pop()?.replaceAll('_', ' ') || '本地时间'
+})
 </script>
-
 <template>
-  <label class="tz-switcher" title="切换展示时区；也可通过链接 ?tz= 分享">
-    <span class="tz-label">时区</span>
-    <select :value="tzState.value" @change="setTz(($event.target as HTMLSelectElement).value)">
-      <option v-for="option in options" :key="option.value" :value="option.value">
-        {{ option.label }}
-      </option>
+  <label class="tz-switcher" :title="`${tzZone} · ${tzOffset}`">
+    <UiIcon name="globe" :size="15" /><span>{{ label }}</span
+    ><UiIcon name="chevron" :size="11" class="select-chevron" />
+    <select aria-label="显示时区" :value="tzState.value" @change="setTz(($event.target as HTMLSelectElement).value)">
+      <option v-for="option in options" :key="option.value" :value="option.value">{{ option.label }}</option>
     </select>
-    <span class="tz-current">{{ tzZone }} {{ tzOffset }}</span>
   </label>
 </template>
-
 <style scoped>
 .tz-switcher {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
-  font-size: 0.82rem;
+  gap: 7px;
+  min-height: 38px;
+  color: var(--text-dim);
+  font-size: 12px;
 }
-.tz-label {
-  color: var(--text-faint);
+.tz-switcher select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
-.tz-current {
-  color: var(--text-faint);
-  font-size: 0.72rem;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
+.tz-switcher:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 5px;
+  border-radius: 3px;
 }
-@media (max-width: 760px) {
-  .tz-label,
-  .tz-current {
-    display: none;
-  }
+.select-chevron {
+  transform: rotate(90deg);
+  margin-left: 3px;
 }
 </style>

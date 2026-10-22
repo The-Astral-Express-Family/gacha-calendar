@@ -6,6 +6,7 @@
 // follows whatever is on screen.
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
+import UiIcon from '@/components/UiIcon.vue'
 import type { Game } from '@/lib/api'
 import { gameColor, shortName } from '@/lib/games'
 import { nowUnix } from '@/stores/now'
@@ -423,7 +424,7 @@ const coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse
           :y="headerHeight - 4"
           :width="band.w"
           :height="height - headerHeight + 4"
-          fill="rgba(139, 160, 205, 0.05)"
+          fill="rgba(169, 190, 213, 0.035)"
         />
 
         <!-- grid + date ticks -->
@@ -433,7 +434,7 @@ const coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse
             :x2="tick.x"
             :y1="headerHeight - 4"
             :y2="height"
-            :stroke="tick.major ? 'rgba(151, 163, 189, 0.22)' : 'rgba(151, 163, 189, 0.08)'"
+            :stroke="tick.major ? 'rgba(176, 186, 200, 0.18)' : 'rgba(176, 186, 200, 0.07)'"
           />
           <text :x="tick.x" :y="16" class="tick" :class="{ major: tick.major }" text-anchor="middle">
             {{ tick.label }}
@@ -504,18 +505,22 @@ const coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse
           <span class="tip-kind">{{ tip.event.kind === 'preview' ? '前瞻直播' : '版本更新' }}</span>
         </div>
         <div class="tip-time">{{ formatDateTime(tzZone, tip.event.unix) }}（{{ tzZone }}）</div>
-        <div class="tip-time faint">国服 {{ formatTime(BUSINESS_TZ, tip.event.unix) }}</div>
+        <div v-if="tzZone !== BUSINESS_TZ" class="tip-time faint">
+          国服 {{ formatTime(BUSINESS_TZ, tip.event.unix) }}
+        </div>
       </div>
     </div>
 
     <div class="stage-tools">
       <button class="tool" title="缩小（-）" aria-label="缩小" @click="zoomStep(1.33)">−</button>
       <button class="tool" title="放大（+）" aria-label="放大" @click="zoomStep(0.75)">＋</button>
-      <button class="tool" title="回到当前范围" aria-label="回到当前范围" @click="emit('recenter')">⌂</button>
+      <button class="tool" title="回到当前范围" aria-label="回到当前范围" @click="emit('recenter')">
+        <UiIcon name="refresh" :size="13" />
+      </button>
     </div>
 
     <div class="gesture-hint faint">
-      {{ coarse ? '拖动平移 · 双指缩放 · 点标记看详情' : '拖动平移 · 滚轮缩放 · 悬停标记看详情' }}
+      {{ coarse ? '拖动 · 双指缩放' : '拖动 · 滚轮缩放' }}
     </div>
   </div>
 </template>
@@ -598,14 +603,15 @@ const coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse
   gap: 4px;
 }
 .tool {
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(11, 17, 30, 0.72);
+  background: #1b2028d9;
+  border-color: var(--border);
   backdrop-filter: blur(6px);
 }
 .tip {
@@ -613,7 +619,7 @@ const coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse
   left: 0;
   top: 0;
   pointer-events: none;
-  background: rgba(9, 14, 26, 0.95);
+  background: #252d38f5;
   border: 1px solid var(--border);
   border-radius: var(--radius-tag);
   padding: 0.5rem 0.7rem;
@@ -642,6 +648,7 @@ const coarse = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse
 .gesture-hint {
   margin-top: 0.35rem;
   text-align: right;
+  font-size: 10px;
 }
 @media (max-width: 620px) {
   .lane-label {

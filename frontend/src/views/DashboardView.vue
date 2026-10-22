@@ -1,32 +1,32 @@
 <script setup lang="ts">
-// Dashboard: interactive timeline first (the schedule board), then the next
-// event, per-game cards, and calendar + agenda. The timeline window is shared
-// state — pan/zoom gestures re-filter the agenda so the list follows the view.
-import { computed, onMounted, ref } from 'vue'
+// The timeline window is shared with the agenda; visual highlights use the
+// full schedule so a pan never hides the next upcoming event.
+import { computed, onMounted, ref, watch } from 'vue'
 
-import ConfidenceBadge from '@/components/ConfidenceBadge.vue'
+import EventCard from '@/components/EventCard.vue'
+import type { ScheduleEvent } from '@/components/EventCard.vue'
+import UiIcon from '@/components/UiIcon.vue'
 import FilterBar from '@/components/FilterBar.vue'
 import GameCard from '@/components/GameCard.vue'
 import MonthCalendar from '@/components/MonthCalendar.vue'
 import TimelineChart from '@/components/TimelineChart.vue'
 import type { TimelineEvent } from '@/components/TimelineChart.vue'
-import type { Game, Meta, Prediction, Version } from '@/lib/api'
+import type { Game, Prediction, Version } from '@/lib/api'
 import { fetchGames, fetchPredictions, fetchVersions } from '@/lib/api'
-import { gameColor } from '@/lib/games'
 import { nowUnix } from '@/stores/now'
 import { tzZone } from '@/stores/tz'
-import { BUSINESS_TZ, dayKey, formatDateTime, formatTime, formatWeekday, offsetLabel, relativeTime } from '@/lib/time'
-
-defineProps<{ meta: Meta | null; lastCycleText: string }>()
+import { dayKey, formatDateShort, formatWeekday } from '@/lib/time'
 
 const games = ref<Game[]>([])
 const predictions = ref<Prediction[]>([])
 const versions = ref<Version[]>([])
 const loadError = ref('')
+const loading = ref(true)
 const selectedGames = ref<string[]>([])
 const rangeDays = ref(30) // 0 = custom window set by timeline gestures
 const sortMode = ref<'time_asc' | 'time_desc'>('time_asc')
 const selectedDay = ref<string | undefined>()
+const agendaExpanded = ref(false)
 const windowStart = ref(0)
 const windowEnd = ref(0)
 
@@ -48,8 +48,13 @@ function onWindow(value: { start: number; end: number }) {
 function recenter() {
   applyPreset(rangeDays.value || 30)
 }
+function resetAgenda() {
+  selectedDay.value = undefined
+  applyPreset(90)
+}
 
 async function load() {
+  loading.value = true
   try {
     const [gamesRes, predictionRes] = await Promise.all([
       fetchGames(),
@@ -62,6 +67,8 @@ async function load() {
     loadError.value = ''
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    loading.value = false
   }
 }
 
@@ -79,25 +86,11 @@ const visibleGames = computed(() =>
   selectedGames.value.length === 0 ? games.value : games.value.filter((game) => selectedGames.value.includes(game.id))
 )
 
-interface AgendaEvent {
-  key: string
-  gameId: string
-  gameName: string
-  kind: 'update' | 'preview'
-  unix: number
-  title: string
-  confidence?: string
-  evidence?: string
-  url?: string
-  cover?: string
-  fallback: string
-}
-
 // Every event for the selected games, unwindowed: the calendar and the
 // "next event" strip always work on the full picture.
-const allEvents = computed<AgendaEvent[]>(() => {
+const allEvents = computed<ScheduleEvent[]>(() => {
   const gameById = new Map(games.value.map((game) => [game.id, game]))
-  const out: AgendaEvent[] = []
+  const out: ScheduleEvent[] = []
   const push = (
     gameId: string,
     kind: 'update' | 'preview',
@@ -118,8 +111,10 @@ const allEvents = computed<AgendaEvent[]>(() => {
       gameId,
       gameName: game.name,
       kind,
+      kindLabel,
       unix,
       title: `${game.name}${versionText} ${label}`,
+      version,
       confidence,
       evidence,
       url,
@@ -205,7 +200,7 @@ const agendaEvents = computed(() => {
 
 const agendaGroups = computed(() => {
   const zone = tzZone.value
-  const groups = new Map<string, AgendaEvent[]>()
+  const groups = new Map<string, ScheduleEvent[]>()
   for (const event of agendaEvents.value) {
     const key = dayKey(zone, event.unix)
     const bucket = groups.get(key) ?? []
@@ -217,134 +212,145 @@ const agendaGroups = computed(() => {
     events: events.sort((a, b) => a.unix - b.unix),
   }))
 })
+const visibleAgendaGroups = computed(() => (agendaExpanded.value ? agendaGroups.value : agendaGroups.value.slice(0, 3)))
+watch(
+  [selectedDay, selectedGames, sortMode, windowStart, windowEnd],
+  () => {
+    agendaExpanded.value = false
+  },
+  { deep: true }
+)
 
-const nextEvent = computed(() => {
-  const upcoming = allEvents.value.filter((event) => event.unix >= nowUnix.value).sort((a, b) => a.unix - b.unix)
-  return upcoming[0]
-})
+const upcomingEvents = computed(() =>
+  allEvents.value
+    .filter((event) => event.unix >= nowUnix.value)
+    .sort((a, b) => a.unix - b.unix)
+    .slice(0, 3)
+)
+const windowLabel = computed(
+  () => `${formatDateShort(tzZone.value, windowStart.value)} — ${formatDateShort(tzZone.value, windowEnd.value)}`
+)
 </script>
 
 <template>
-  <div class="dashboard">
-    <section v-if="loadError" class="panel panel-pad error">加载失败：{{ loadError }}（稍后自动重试）</section>
-
-    <!-- timeline: the schedule board, first thing on the page -->
-    <section class="panel panel-pad block timeline-block">
-      <h2 class="section-title">
-        版本时间轴
-        <span class="hint">◆ 更新 · ○ 前瞻 · 按 {{ tzZone }}（{{ offsetLabel(tzZone) }}）切日</span>
-        <span v-if="lastCycleText" class="hint data-hint">数据截至 {{ lastCycleText }}</span>
-      </h2>
-      <FilterBar
-        :games="games"
-        :selected="selectedGames"
-        :range="rangeDays"
-        @toggle-game="toggleGame"
-        @range="applyPreset"
-        @all-games="selectedGames = []"
-      />
-      <TimelineChart
-        :games="visibleGames"
-        :events="timelineEvents"
-        :start-unix="windowStart"
-        :end-unix="windowEnd"
-        @window="onWindow"
-        @recenter="recenter"
-      />
-    </section>
-
-    <!-- next event countdown -->
-    <section v-if="nextEvent" class="panel hero" :style="{ '--hero-color': gameColor(nextEvent.gameId) }">
-      <div class="hero-main">
-        <div class="hero-kicker faint">下一场 · {{ nextEvent.kind === 'preview' ? '前瞻直播' : '版本更新' }}</div>
-        <h1 class="hero-title">{{ nextEvent.title }}</h1>
-        <div class="hero-times">
-          <span>{{ formatDateTime(tzZone, nextEvent.unix) }}（{{ tzZone }}）</span>
-          <span class="faint">国服 {{ formatTime(BUSINESS_TZ, nextEvent.unix) }}</span>
+  <div class="dashboard" :aria-busy="loading">
+    <div v-if="loadError" class="error-state" role="alert">
+      <UiIcon name="info" /><span>日程加载失败：{{ loadError }}</span
+      ><button @click="load"><UiIcon name="refresh" :size="14" />重试</button>
+    </div>
+    <section class="timeline-section" aria-labelledby="timeline-title">
+      <div class="section-heading">
+        <h1 id="timeline-title" class="section-title">版本时间轴</h1>
+        <div class="timeline-legend" aria-label="事件图例">
+          <span><i class="update-mark" />更新</span><span><i class="preview-mark" />前瞻</span>
         </div>
       </div>
-      <div class="hero-count">
-        <div class="hero-countdown">{{ relativeTime(nextEvent.unix, nowUnix) }}</div>
+      <div class="panel panel-pad timeline-panel">
+        <FilterBar
+          :games="games"
+          :selected="selectedGames"
+          :range="rangeDays"
+          @toggle-game="toggleGame"
+          @range="applyPreset"
+          @all-games="selectedGames = []"
+        />
+        <div v-if="loading && !games.length" class="timeline-loading" role="status">正在载入日程…</div>
+        <TimelineChart
+          v-else
+          :games="visibleGames"
+          :events="timelineEvents"
+          :start-unix="windowStart"
+          :end-unix="windowEnd"
+          @window="onWindow"
+          @recenter="recenter"
+        />
+        <div class="timeline-caption">
+          <span>{{ windowLabel }}</span
+          ><span :title="tzZone">{{ tzZone === 'Asia/Shanghai' ? '国服时间' : tzZone }}</span>
+        </div>
       </div>
-      <img
-        v-if="nextEvent.cover || nextEvent.fallback"
-        :src="nextEvent.cover || nextEvent.fallback"
-        alt=""
-        class="hero-cover"
-        referrerpolicy="no-referrer"
-        @error="($event.target as HTMLImageElement).src = nextEvent.fallback"
-      />
     </section>
 
-    <!-- game cards -->
-    <section class="cards">
-      <GameCard v-for="game in visibleGames" :key="game.id" :game="game" />
+    <section v-if="upcomingEvents.length" aria-labelledby="upcoming-title">
+      <div class="section-heading">
+        <h2 id="upcoming-title" class="section-title">即将到来</h2>
+        <a href="#agenda" class="section-link">查看日程<UiIcon name="chevron" :size="13" /></a>
+      </div>
+      <div class="upcoming-grid" :class="{ 'single-event': upcomingEvents.length === 1 }">
+        <EventCard :event="upcomingEvents[0]!" featured />
+        <div v-if="upcomingEvents.length > 1" class="upcoming-rail">
+          <EventCard v-for="event in upcomingEvents.slice(1)" :key="event.key" :event="event" />
+        </div>
+      </div>
     </section>
 
-    <!-- calendar + agenda -->
-    <section class="two-col">
-      <div class="panel panel-pad block">
-        <h2 class="section-title">
-          月历 <span class="hint">按 {{ tzZone }} 切日</span>
+    <section aria-labelledby="games-title">
+      <div class="section-heading">
+        <h2 id="games-title" class="section-title">
+          游戏一览<span class="section-count">{{ visibleGames.length || '—' }}</span>
         </h2>
-        <MonthCalendar :events="allEvents" :selected-key="selectedDay" @select="selectedDay = $event" />
+        <span class="section-note">{{ selectedGames.length ? '已筛选' : '全部游戏' }}</span>
       </div>
-      <div class="panel panel-pad block">
-        <h2 class="section-title">
-          事件列表
-          <span class="hint">
-            <template v-if="selectedDay"
-              >{{ selectedDay }}（{{ tzZone }}）<button class="link" @click="selectedDay = undefined">
-                清除
-              </button></template
+      <div v-if="loading && !games.length" class="cards" aria-label="加载游戏中">
+        <div v-for="i in 6" :key="i" class="skeleton-card">
+          <div />
+          <span />
+        </div>
+      </div>
+      <div v-else-if="!visibleGames.length" class="panel empty-state">
+        <UiIcon name="calendar" :size="30" /><span>暂无游戏日程</span><button @click="load">重新加载</button>
+      </div>
+      <div v-else class="cards"><GameCard v-for="game in visibleGames" :key="game.id" :game="game" /></div>
+    </section>
+
+    <section id="agenda" class="agenda-section" aria-labelledby="agenda-title">
+      <div class="section-heading">
+        <h2 id="agenda-title" class="section-title">日程速览</h2>
+        <span class="section-note">{{ agendaEvents.length }} 场事件</span>
+      </div>
+      <div class="two-col">
+        <aside class="panel panel-pad calendar-panel" aria-label="月历">
+          <MonthCalendar :events="allEvents" :selected-key="selectedDay" @select="selectedDay = $event" />
+        </aside>
+        <div class="agenda-list">
+          <div class="agenda-toolbar">
+            <button
+              v-if="selectedDay"
+              class="selected-day"
+              @click="selectedDay = undefined"
+              :aria-label="`清除日期筛选 ${selectedDay}`"
             >
-            <template v-else>{{ sortMode === 'time_asc' ? '由近到远' : '由远到近' }}</template>
-          </span>
-          <label class="sort">
-            排序
-            <select
-              :value="sortMode"
-              @change="sortMode = ($event.target as HTMLSelectElement).value as typeof sortMode"
-            >
-              <option value="time_asc">近 → 远</option>
-              <option value="time_desc">远 → 近</option>
+              {{ selectedDay }}<UiIcon name="close" :size="12" />
+            </button>
+            <span v-else class="section-note">{{ windowLabel }}</span>
+            <select v-model="sortMode" aria-label="日程排序">
+              <option value="time_asc">时间从近到远</option>
+              <option value="time_desc">时间从远到近</option>
             </select>
-          </label>
-        </h2>
-        <div v-if="agendaGroups.length === 0" class="faint empty">所选范围内没有事件，试试扩大范围或选择全部游戏。</div>
-        <div v-for="group in agendaGroups" :key="group.key" class="day-group">
-          <div class="day-head">
-            <span class="day-date">{{ group.key }}</span>
-            <span class="faint">{{ formatWeekday(tzZone, group.events[0].unix) }}</span>
           </div>
-          <div
-            v-for="event in group.events"
-            :key="event.key"
-            class="event-row"
-            :style="{ '--game': gameColor(event.gameId) }"
-          >
-            <img
-              class="thumb"
-              :src="event.cover || event.fallback"
-              alt=""
-              loading="lazy"
-              referrerpolicy="no-referrer"
-              @error="($event.target as HTMLImageElement).src = event.fallback"
-            />
-            <div class="event-main">
-              <div class="event-title">
-                <span class="event-time">{{ formatTime(tzZone, event.unix) }}</span>
-                {{ event.title }}
-                <ConfidenceBadge :value="event.confidence" />
-              </div>
-              <div class="event-meta">
-                <span>国服 {{ formatTime(BUSINESS_TZ, event.unix) }}</span>
-                <span>{{ relativeTime(event.unix, nowUnix) }}</span>
-                <span v-if="event.evidence" class="faint">依据：{{ event.evidence }}</span>
-                <a v-if="event.url" :href="event.url" target="_blank" rel="noreferrer">官方公告 ↗</a>
-              </div>
+          <div v-if="!agendaGroups.length" class="panel empty-state">
+            <UiIcon name="calendar" :size="30" /><span>{{ selectedDay ? '这一天暂无日程' : '当前范围暂无日程' }}</span
+            ><button @click="resetAgenda">查看三个月日程</button>
+          </div>
+          <div v-for="group in visibleAgendaGroups" :key="group.key" class="day-group">
+            <div class="day-head">
+              <time>{{ group.key.slice(5).replace('-', '.') }}</time
+              ><span>{{ formatWeekday(tzZone, group.events[0]!.unix) }}</span
+              ><i />
+            </div>
+            <div class="day-events">
+              <EventCard v-for="event in group.events" :key="event.key" :event="event" compact />
             </div>
           </div>
+          <button
+            v-if="agendaGroups.length > 3"
+            class="more-agenda"
+            :aria-expanded="agendaExpanded"
+            @click="agendaExpanded = !agendaExpanded"
+          >
+            {{ agendaExpanded ? '收起日程' : `展开其余 ${agendaGroups.length - 3} 天日程` }}
+            <UiIcon name="chevron" :size="13" :class="{ expanded: agendaExpanded }" />
+          </button>
         </div>
       </div>
     </section>
@@ -355,172 +361,280 @@ const nextEvent = computed(() => {
 .dashboard {
   display: flex;
   flex-direction: column;
-  gap: 1.1rem;
-  padding: 1.1rem 0 1.4rem;
+  gap: 40px;
+  padding: 32px 0 52px;
 }
-.error {
-  color: var(--danger);
-}
-.timeline-block {
-  /* the board gets a touch more presence than the quiet panels below */
-  background: linear-gradient(180deg, rgba(151, 173, 214, 0.07), rgba(151, 173, 214, 0.04));
-}
-.data-hint {
-  margin-left: auto;
-}
-.hero {
+.timeline-legend {
   display: flex;
-  align-items: stretch;
-  overflow: hidden;
-  min-height: 120px;
-  border-left: 3px solid var(--hero-color, var(--accent));
-}
-.hero-main {
-  flex: 1;
-  padding: 1rem 1.25rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  justify-content: center;
-  min-width: 0;
-}
-.hero-title {
-  margin: 0;
-  font-size: 1.35rem;
-  overflow-wrap: anywhere;
-}
-.hero-times {
-  display: flex;
-  gap: 1rem;
-  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 11px;
   color: var(--text-dim);
-  font-size: 0.9rem;
-  font-variant-numeric: tabular-nums;
 }
-.hero-count {
+.timeline-legend > span {
   display: flex;
   align-items: center;
-  padding: 0 1.4rem;
+  gap: 7px;
 }
-.hero-countdown {
-  font-size: 1.9rem;
-  font-weight: 750;
-  color: var(--hero-color, var(--accent));
-  white-space: nowrap;
+.timeline-legend i {
+  width: 7px;
+  height: 7px;
+  display: inline-block;
+}
+.update-mark {
+  background: var(--text-dim);
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+.preview-mark {
+  border: 1px solid var(--text-dim);
+  border-radius: 50%;
+}
+.timeline-panel {
+  padding-bottom: 15px;
+  background: linear-gradient(120deg, #202733, var(--panel) 65%);
+}
+.timeline-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--border);
+  margin-top: 16px;
+  padding-top: 12px;
+  color: var(--text-faint);
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
-.hero-cover {
-  width: 280px;
-  object-fit: cover;
-  clip-path: polygon(18% 0, 100% 0, 100% 100%, 0 100%);
+.timeline-loading {
+  display: grid;
+  place-items: center;
+  min-height: 306px;
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.section-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.upcoming-grid {
+  display: grid;
+  grid-template-columns: 1.85fr 1fr;
+  gap: 18px;
+}
+.upcoming-grid.single-event {
+  grid-template-columns: 1fr;
+}
+.upcoming-rail {
+  display: grid;
+  gap: 18px;
+  grid-auto-rows: 1fr;
 }
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 0.9rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
 }
-.block {
-  margin: 0.2rem 0;
+.section-count {
+  display: inline-grid;
+  place-items: center;
+  width: 23px;
+  height: 23px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-weight: 400;
 }
 .two-col {
   display: grid;
-  grid-template-columns: 340px 1fr;
-  gap: 0.9rem;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 30px;
   align-items: start;
 }
-.sort {
-  margin-left: auto;
-  display: inline-flex;
-  gap: 0.4rem;
+.calendar-panel {
+  position: sticky;
+  top: 102px;
+  padding: 20px;
+}
+.agenda-toolbar {
+  display: flex;
   align-items: center;
-  font-size: 0.78rem;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.agenda-toolbar select {
+  font-size: 11px;
+  min-height: 32px;
+  padding: 4px 10px;
+}
+.selected-day {
+  font-size: 11px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 5px 9px;
+}
+.day-group + .day-group {
+  margin-top: 24px;
+}
+.more-agenda {
+  width: 100%;
+  margin-top: 22px;
+  background: transparent;
+  border: 1px solid var(--border);
   color: var(--text-dim);
-  font-weight: 400;
+  font-size: 12px;
 }
-.sort select {
-  font-size: 0.8rem;
-  padding: 0.24rem 0.5rem;
+.more-agenda > svg {
+  transform: rotate(90deg);
 }
-.day-group {
-  margin-bottom: 0.8rem;
+.more-agenda > svg.expanded {
+  transform: rotate(-90deg);
 }
 .day-head {
   display: flex;
-  gap: 0.55rem;
-  align-items: baseline;
-  border-bottom: 1px dashed var(--border);
-  padding-bottom: 0.25rem;
-  margin-bottom: 0.45rem;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 13px;
 }
-.day-date {
-  font-weight: 650;
+.day-head time {
+  font-size: 17px;
   font-variant-numeric: tabular-nums;
 }
-.event-row {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-  padding: 0.45rem 0.55rem;
-  border-radius: var(--radius);
-  border-left: 3px solid var(--game);
+.day-head > span {
+  color: var(--text-faint);
+  font-size: 11px;
 }
-.event-row:hover {
-  background: rgba(151, 173, 214, 0.06);
-}
-.thumb {
-  width: 76px;
-  height: 44px;
-  border-radius: var(--radius-tag);
-  object-fit: cover;
-  flex-shrink: 0;
-}
-.event-main {
-  min-width: 0;
+.day-head i {
+  height: 1px;
   flex: 1;
+  margin-left: 8px;
+  background: var(--border);
 }
-.event-title {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  flex-wrap: wrap;
-  font-weight: 600;
-  font-size: 0.92rem;
+.day-events {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
 }
-.event-time {
-  font-variant-numeric: tabular-nums;
-  color: var(--text-dim);
-  font-weight: 500;
+.skeleton-card {
+  overflow: hidden;
+  height: 360px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
 }
-.event-meta {
-  display: flex;
-  gap: 0.8rem;
-  flex-wrap: wrap;
-  font-size: 0.74rem;
-  color: var(--text-dim);
-  margin-top: 2px;
+.skeleton-card > div {
+  height: 70%;
+  background: linear-gradient(110deg, #252d38 20%, #303a48 40%, #252d38 60%);
+  background-size: 200% 100%;
+  animation: shimmer 2s ease-in-out infinite;
 }
-.empty {
-  padding: 1rem 0;
+.skeleton-card > span {
+  display: block;
+  height: 8px;
+  margin: 25px 20px;
+  width: 50%;
+  background: var(--border);
+  border-radius: 3px;
 }
-button.link {
-  background: none;
-  border: none;
-  color: var(--accent);
-  padding: 0;
-  font-size: 0.74rem;
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (max-width: 1100px) {
+  .cards {
+    gap: 16px;
+  }
+  .two-col {
+    grid-template-columns: 290px minmax(0, 1fr);
+    gap: 22px;
+  }
 }
 @media (max-width: 900px) {
+  .cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .upcoming-grid {
+    grid-template-columns: 1.5fr 1fr;
+    gap: 14px;
+  }
+  .upcoming-rail {
+    gap: 14px;
+  }
   .two-col {
+    grid-template-columns: 270px minmax(0, 1fr);
+    gap: 20px;
+  }
+  .day-events {
     grid-template-columns: 1fr;
   }
-  .hero-cover {
+}
+@media (max-width: 640px) {
+  .dashboard {
+    padding-top: 24px;
+    gap: 30px;
+    padding-bottom: 36px;
+  }
+  .upcoming-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .upcoming-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .upcoming-rail :deep(.event-card) {
+    min-height: 170px;
+  }
+  .upcoming-rail :deep(.event-top) {
+    padding: 11px;
+  }
+  .upcoming-rail :deep(.event-content) {
+    left: 12px;
+    right: 12px;
+    bottom: 14px;
+  }
+  .upcoming-rail :deep(.event-name) {
+    display: block;
+  }
+  .upcoming-rail :deep(.event-name h3) {
+    font-size: 15px;
+    margin-bottom: 3px;
+  }
+  .upcoming-rail :deep(.event-version) {
     display: none;
   }
-  .hero-count {
-    padding: 0 0.95rem 0 0;
+  .upcoming-rail :deep(.event-datetime) {
+    flex-wrap: wrap;
+    gap: 5px;
   }
-  .hero-countdown {
-    font-size: 1.5rem;
+  .upcoming-rail :deep(.event-datetime time) {
+    gap: 7px;
+    font-size: 11px;
+  }
+  .upcoming-rail :deep(.event-weekday) {
+    display: none;
+  }
+  .cards {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .two-col {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  .calendar-panel {
+    position: static;
+    padding: 22px;
+  }
+  .timeline-legend {
+    gap: 12px;
+  }
+  .day-events {
+    grid-template-columns: 1fr;
   }
 }
 </style>
