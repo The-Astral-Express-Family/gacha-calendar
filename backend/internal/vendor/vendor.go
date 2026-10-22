@@ -39,6 +39,7 @@ type Post struct {
 	Title       string
 	Subtitle    string
 	Brief       string
+	Cover       string // banner image URL, empty when none
 	URL         string
 	PublishedAt time.Time // UTC
 }
@@ -85,6 +86,7 @@ type annEnvelope struct {
 				AnnID     int    `json:"ann_id"`
 				Title     string `json:"title"`
 				Subtitle  string `json:"subtitle"`
+				Banner    string `json:"banner"`
 				Type      int    `json:"type"`
 				StartTime string `json:"start_time"`
 				TagLabel  string `json:"tag_label"`
@@ -132,6 +134,7 @@ func parseMihoyoPayload(body []byte) []Post {
 				ExternalID:  "ann-" + strconv.Itoa(item.AnnID),
 				Title:       stripTags(item.Title),
 				Subtitle:    stripTags(item.Subtitle),
+				Cover:       item.Banner,
 				PublishedAt: published.UTC(),
 			})
 		}
@@ -159,6 +162,11 @@ var endfieldNewsItem = regexp.MustCompile(
 
 var endfieldBrief = regexp.MustCompile(
 	`\\?"brief\\?":\\?"((?:[^"\\]|\\.)*?)\\?"`)
+
+// endfieldCover matches the plain "cover" field ("extraCover" does not
+// match: its quote sits before "extra", not before "cover").
+var endfieldCover = regexp.MustCompile(
+	`\\?"cover\\?":\\?"((?:[^"\\]|\\.)*?)\\?"`)
 
 func decodeEscaped(raw string) string {
 	var out string
@@ -189,16 +197,21 @@ func parseEndfieldPage(page string) []Post {
 			published = time.Unix(ts, 0)
 		}
 		brief := ""
-		// The brief follows this item's displayTime/cover fields; search a
-		// bounded window after the match for the nearest brief.
+		cover := ""
+		// The cover and brief follow this item's displayTime; search a
+		// bounded window after the match for the nearest of each.
 		tail := page[loc[1]:min(len(page), loc[1]+1400)]
 		if b := endfieldBrief.FindStringSubmatch(tail); b != nil {
 			brief = decodeEscaped(b[1])
+		}
+		if cv := endfieldCover.FindStringSubmatch(tail); cv != nil {
+			cover = decodeEscaped(cv[1])
 		}
 		out = append(out, Post{
 			ExternalID:  "ef-" + cid,
 			Title:       title,
 			Brief:       brief,
+			Cover:       cover,
 			URL:         "https://endfield.hypergryph.com/news/" + cid,
 			PublishedAt: published.UTC(),
 		})

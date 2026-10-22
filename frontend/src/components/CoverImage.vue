@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// Event main visual: prefer the collected official post image; on any load
-// failure fall back to the per-game default SVG.
+// Event main visual: prefer the collected local image, but also accept a
+// remote CDN URL (sent without a referer, which the image CDNs allow);
+// on any load failure fall back to the per-game default SVG.
 import { ref } from 'vue'
 
 const props = defineProps<{
@@ -10,7 +11,7 @@ const props = defineProps<{
 }>()
 
 const failed = ref(false)
-const current = ref(props.src && !props.src.startsWith('http') ? props.src : '')
+const current = ref(props.src || '')
 </script>
 
 <template>

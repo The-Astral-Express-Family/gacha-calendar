@@ -78,12 +78,22 @@ func (d *Downloader) store(relBase, image string, data []byte) (string, error) {
 	return "/covers/" + name, nil
 }
 
+// absoluteURL upgrades protocol-relative image URLs ("//i0.hdslb.com/…"),
+// which some Bilibili payloads use, to https.
+func absoluteURL(image string) string {
+	if strings.HasPrefix(image, "//") {
+		return "https:" + image
+	}
+	return image
+}
+
 // SaveGame stores the newest main visual for a game. It returns the immutable
 // hashed web path, or "" on failure.
 func (d *Downloader) SaveGame(ctx context.Context, gameID, image string) string {
 	if image == "" {
 		return ""
 	}
+	image = absoluteURL(image)
 	data, err := d.get(ctx, image)
 	if err != nil {
 		d.log.Warn("cover download failed", "game", gameID, "error", err.Error())
@@ -107,6 +117,7 @@ func (d *Downloader) SavePost(ctx context.Context, postID uint, image string) st
 	if image == "" {
 		return ""
 	}
+	image = absoluteURL(image)
 	data, err := d.get(ctx, image)
 	if err != nil {
 		d.log.Warn("post cover download failed", "post", postID, "error", err.Error())

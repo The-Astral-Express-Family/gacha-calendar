@@ -143,10 +143,17 @@ func isDynamicNoise(text string) bool {
 	return dynamicNoise.MatchString(text)
 }
 
+// coverStore is the slice of covers.Downloader the collector needs; an
+// interface so tests can fake the downloads.
+type coverStore interface {
+	SaveGame(ctx context.Context, gameID, image string) string
+	SavePost(ctx context.Context, postID uint, image string) string
+}
+
 type Collector struct {
 	db      *gorm.DB
 	bili    *bili.Client
-	covers  *covers.Downloader
+	covers  coverStore
 	vendors *vendor.Client
 	log     *slog.Logger
 	opts    ScheduleOptions
@@ -546,6 +553,12 @@ func (c *Collector) collectGame(ctx context.Context, id games.GameID) (*gameOutc
 	// but WuWa/Endfield style vendors also use articles).
 	out.errs = c.scanTeaserArticles(ctx, game, articles, now, out.errs)
 
+	// 1a'. Self-heal post covers: backfilled articles were stored without
+	// images and video/dynamic posts keep only the remote CDN URL, which
+	// browsers cannot hotlink. Fill from the list already fetched and
+	// localize, a few downloads per cycle.
+	c.healPostCovers(ctx, game, articles)
+
 	// 1b. Newest version-update notice.
 	picked := pickArticle(game, articles, now)
 	if picked != nil && picked.IDString() != out.state.LastArticleID {
@@ -877,15 +890,22 @@ func (c *Collector) collectVendorPosts(ctx context.Context, game games.Game,
 		}
 		summary := firstNonEmptyStr(post.Brief, post.Subtitle)
 		isTeaser := strings.Contains(post.Title, "前瞻") || strings.Contains(post.Title, "直播")
-		if err := c.upsertPost(&model.Post{
+		row := &model.Post{
 			GameID: string(game.ID), SourceType: "official",
 			ExternalID: post.ExternalID, URL: post.URL,
 			Title: post.Title, Summary: summary, Author: game.Name,
 			PublishTime: post.PublishedAt, FetchedAt: now,
-			IsTeaser: isTeaser,
-		}); err != nil {
+			IsTeaser: isTeaser, CoverURL: post.Cover,
+		}
+		if err := c.upsertPost(row); err != nil {
 			errs = append(errs, "官方源入库："+err.Error())
 			continue
+		}
+		if row.ID != 0 && row.CoverPath == "" && row.CoverURL != "" {
+			if path := c.covers.SavePost(ctx, row.ID, row.CoverURL); path != "" {
+				row.CoverPath = path
+				c.db.Save(row)
+			}
 		}
 		stored++
 	}
@@ -1165,6 +1185,56 @@ func (c *Collector) finalizeGame(out *gameOutcome) {
 	// Best-effort game main visual: article banner > preview video cover >
 	// dynamic picture. The fallback SVG always exists.
 	c.refreshGameCover(context.Background(), id)
+}
+
+// maxCoverHealPerGame bounds per-cycle cover downloads: the image CDNs are
+// generous, but a handful per game per refresh keeps the heal polite.
+const maxCoverHealPerGame = 8
+
+// healPostCovers backfills missing post covers. Two gaps exist in stored
+// rows: bootstrap-backfilled articles were stored without cover_url, and
+// video/dynamic posts keep only the remote CDN URL — the image CDNs reject
+// foreign referers, so a post is only displayable once its cover is
+// downloaded locally. The article list already in hand carries image_urls,
+// so recent article rows heal without extra API calls; every post that has
+// a cover URL but no local file gets downloaded, newest first, until no
+// gaps remain.
+func (c *Collector) healPostCovers(ctx context.Context, game games.Game, articles []bili.Article) {
+	var posts []model.Post
+	if err := c.db.Where("game_id = ? AND cover_path = ''", string(game.ID)).
+		Order("publish_time DESC").Limit(2 * maxCoverHealPerGame).
+		Find(&posts).Error; err != nil || len(posts) == 0 {
+		return
+	}
+	listImages := make(map[string]string, len(articles))
+	for i := range articles {
+		if imgs := articles[i].ImageURLs; len(imgs) > 0 && imgs[0] != "" {
+			listImages[articles[i].IDString()] = imgs[0]
+		}
+	}
+	healed, downloads := 0, 0
+	for i := range posts {
+		post := &posts[i]
+		if post.CoverURL == "" && post.SourceType == "article" {
+			post.CoverURL = listImages[post.ExternalID]
+		}
+		if post.CoverURL == "" || downloads >= maxCoverHealPerGame {
+			continue
+		}
+		path := c.covers.SavePost(ctx, post.ID, post.CoverURL)
+		if path == "" {
+			continue
+		}
+		downloads++
+		if err := c.db.Model(post).Updates(map[string]any{
+			"cover_url": post.CoverURL, "cover_path": path,
+		}).Error; err == nil {
+			healed++
+		}
+	}
+	if healed > 0 {
+		c.logGame(game)("cover heal: %d posts localized (%d downloads)", healed, downloads)
+	}
 }
 
 // refreshGameCover stores the newest event main visual for a game:
@@ -1587,12 +1657,18 @@ func (c *Collector) backfillArticles(ctx context.Context, game games.Game) {
 				versions++
 			}
 			// Keep the posts page useful: store the recent notices' summaries.
+			// Cover localization is left to healPostCovers on later cycles.
 			if published.After(now.Add(-180 * day)) {
+				cover := ""
+				if len(item.ImageURLs) > 0 {
+					cover = item.ImageURLs[0]
+				}
 				_ = c.upsertPost(&model.Post{
 					GameID: string(game.ID), SourceType: "article", ExternalID: item.IDString(),
 					URL: bili.ArticleURL(item.IDString()), Title: item.Title,
 					Summary: summaryText, Author: game.Name,
 					PublishTime: published, FetchedAt: now, IsUpdateNotice: true,
+					CoverURL: cover,
 				})
 			}
 		}
