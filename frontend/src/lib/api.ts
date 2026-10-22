@@ -17,12 +17,14 @@ export interface Prediction {
   game_id: string
   game_name: string
   version: string
+  version_name?: string
   update?: TimeMeta
   preview?: TimeMeta
   update_confidence: string
   preview_confidence: string
   update_evidence: string
   preview_evidence: string
+  is_phase_update: boolean
   announcement_id?: number
   announcement_url?: string
   generated_at: TimeOnly
@@ -40,6 +42,8 @@ export interface Game {
   last_error?: string
   cover?: string
   fallback: string
+  calibrated: boolean
+  version_count: number
   prediction?: Prediction
 }
 
@@ -101,6 +105,13 @@ export interface Meta {
     last_cycle_ok: number
     last_cycle_all: number
     last_error: string
+    next_run_at?: string
+    scheduler?: string
+  }
+  bootstrap?: {
+    state: string
+    running: boolean
+    finished_at?: string
   }
 }
 

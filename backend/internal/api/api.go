@@ -42,6 +42,7 @@ func Register(mux *http.ServeMux, d Deps) {
 	// Admin routes are only mounted when a token is configured.
 	if d.AdminToken != "" {
 		mux.HandleFunc("POST /api/admin/refresh", h.admin(h.refresh))
+		mux.HandleFunc("POST /api/admin/bootstrap", h.admin(h.bootstrap))
 		mux.HandleFunc("PUT /api/admin/overrides/{game}", h.admin(h.putOverride))
 		mux.HandleFunc("DELETE /api/admin/overrides/{game}", h.admin(h.deleteOverride))
 	}
@@ -97,12 +98,14 @@ type predictionView struct {
 	GameID            string       `json:"game_id"`
 	GameName          string       `json:"game_name"`
 	Version           string       `json:"version"`
+	VersionName       string       `json:"version_name,omitempty"`
 	Update            *timeMeta    `json:"update"`
 	Preview           *timeMeta    `json:"preview"`
 	UpdateConfidence  string       `json:"update_confidence"`
 	PreviewConfidence string       `json:"preview_confidence"`
 	UpdateEvidence    string       `json:"update_evidence"`
 	PreviewEvidence   string       `json:"preview_evidence"`
+	IsPhaseUpdate     bool         `json:"is_phase_update"`
 	AnnouncementID    *uint        `json:"announcement_id"`
 	AnnouncementURL   string       `json:"announcement_url,omitempty"`
 	GeneratedAt       timeMetaOnly `json:"generated_at"`
@@ -116,12 +119,14 @@ type timeMetaOnly struct {
 func viewPrediction(p model.Prediction, now time.Time, gameName, announcementURL string) predictionView {
 	view := predictionView{
 		ID: p.ID, GameID: p.GameID, GameName: gameName, Version: p.Version,
+		VersionName:       p.VersionName,
 		Update:            timeMetaOf(p.UpdateStart, p.UpdateEnd),
 		Preview:           timeMetaOf(p.PreviewStart, p.PreviewEnd),
 		UpdateConfidence:  p.UpdateConfidence,
 		PreviewConfidence: p.PreviewConfidence,
 		UpdateEvidence:    p.UpdateEvidence,
 		PreviewEvidence:   p.PreviewEvidence,
+		IsPhaseUpdate:     p.IsPhaseUpdate,
 		AnnouncementID:    p.AnnouncementID,
 		AnnouncementURL:   announcementURL,
 		GeneratedAt:       timeMetaOnly{UTC: p.GeneratedAt.UTC().Format(time.RFC3339)},
@@ -554,6 +559,8 @@ type gameView struct {
 	LastError     string          `json:"last_error,omitempty"`
 	Cover         string          `json:"cover,omitempty"`
 	Fallback      string          `json:"fallback"`
+	Calibrated    bool            `json:"calibrated"`
+	VersionCount  int64           `json:"version_count"`
 	Prediction    *predictionView `json:"prediction,omitempty"`
 }
 
@@ -579,6 +586,12 @@ func (h *handlers) games(w http.ResponseWriter, r *http.Request) {
 		if state.LastRefreshAt != nil {
 			view.LastRefreshAt = metaOnly(state.LastRefreshAt)
 		}
+		var stats model.GameStats
+		if err := h.d.DB.First(&stats, "game_id = ?", state.ID).Error; err == nil {
+			view.Calibrated = stats.SampleCount >= 3
+			view.CycleDays = maxInt(stats.CycleDays, state.CycleDays)
+		}
+		h.d.DB.Model(&model.Version{}).Where("game_id = ?", state.ID).Count(&view.VersionCount)
 		var prediction model.Prediction
 		if err := h.d.DB.Where("game_id = ? AND active = ?", state.ID, true).
 			First(&prediction).Error; err == nil {
@@ -590,20 +603,35 @@ func (h *handlers) games(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": views})
 }
 
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // --- GET /api/meta ---
 
 func (h *handlers) meta(w http.ResponseWriter, r *http.Request) {
 	var state model.CollectState
 	_ = h.d.DB.First(&state, 1).Error
 	running := false
+	bootRunning := false
 	if h.d.Collector != nil {
 		running = h.d.Collector.Running()
+		bootRunning = h.d.Collector.BootstrapRunning()
 	}
-	var lastCycleAt *string
-	if state.LastCycleAt != nil {
-		formatted := state.LastCycleAt.UTC().Format(time.RFC3339)
-		lastCycleAt = &formatted
+	var lastCycleAt, nextRunAt, bootstrapAt *string
+	strPtr := func(t *time.Time) *string {
+		if t == nil {
+			return nil
+		}
+		formatted := t.UTC().Format(time.RFC3339)
+		return &formatted
 	}
+	lastCycleAt = strPtr(state.LastCycleAt)
+	nextRunAt = strPtr(state.NextRunAt)
+	bootstrapAt = strPtr(state.BootstrapAt)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"service":     "gacha-calendar",
 		"version":     h.d.Version,
@@ -620,6 +648,13 @@ func (h *handlers) meta(w http.ResponseWriter, r *http.Request) {
 			"last_cycle_ok":    state.LastCycleOK,
 			"last_cycle_all":   state.LastCycleAll,
 			"last_error":       state.LastError,
+			"next_run_at":      nextRunAt,
+			"scheduler":        "adaptive: 事件窗口内 15–30 分钟（发布黄金时段加密），平时按基础间隔",
+		},
+		"bootstrap": map[string]any{
+			"state":       state.BootstrapState,
+			"running":     bootRunning,
+			"finished_at": bootstrapAt,
 		},
 	})
 }
@@ -653,6 +688,16 @@ func (h *handlers) refresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"started": started,
 		"hint":    "刷新在后台串行执行，可通过 /api/meta 或 /api/games 观察状态",
+	})
+}
+
+// bootstrap re-runs the guided history backfill (first initialization or a
+// forced recalibration). It is serial with regular cycles on purpose.
+func (h *handlers) bootstrap(w http.ResponseWriter, r *http.Request) {
+	started := h.d.Collector.RequestBootstrap()
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"started": started,
+		"hint":    "回填在后台串行执行（约数分钟），可通过 /api/meta 的 bootstrap 字段观察进度",
 	})
 }
 

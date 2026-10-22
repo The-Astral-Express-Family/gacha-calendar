@@ -14,6 +14,11 @@ const nowUnix = computed(() => Math.floor(Date.now() / 1000))
 
 const update = computed(() => props.game.prediction?.update)
 const preview = computed(() => props.game.prediction?.preview)
+const isPhase = computed(() => props.game.prediction?.is_phase_update ?? false)
+
+const previewPlaceholder = computed(() =>
+  isPhase.value ? '阶段内容更新，无前瞻直播' : '暂无预测',
+)
 
 const countdownTarget = computed(() => {
   const candidates = [update.value, preview.value]
@@ -54,11 +59,11 @@ const statusText = computed(() => {
             {{ relativeTime(preview.unix_seconds, nowUnix) }}
           </span>
         </template>
-        <span v-else class="meta">暂无预测</span>
+        <span v-else class="meta" :title="game.prediction?.preview_evidence || ''">{{ previewPlaceholder }}</span>
         <ConfidenceBadge :value="game.prediction?.preview_confidence" />
       </div>
       <div class="event update">
-        <span class="label">版本更新</span>
+        <span class="label">{{ isPhase ? '阶段更新' : '版本更新' }}</span>
         <template v-if="update">
           <span class="when">{{ formatShort(tzZone, update.unix_seconds) }}</span>
           <span class="meta">

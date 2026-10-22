@@ -46,8 +46,12 @@ type Post struct {
 	// True when the collector treated this post as the newest version-update
 	// notice for its game.
 	IsUpdateNotice bool
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// True when the collector classified this post as a preview-announcement
+	// (前瞻预告): it is replayed as a planner input on every later cycle, so
+	// an officially announced stream survives feed outages.
+	IsTeaser  bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Version is one parsed historical version: the announcement facts of a
@@ -76,22 +80,43 @@ type Prediction struct {
 	ID                uint       `gorm:"primaryKey"`
 	GameID            string     `gorm:"size:16;index:idx_predictions_game_generated"`
 	Version           string     `gorm:"size:16"`
+	VersionName       string     `gorm:"size:64"`
 	UpdateStart       *time.Time `gorm:"index"`
 	UpdateEnd         *time.Time
 	PreviewStart      *time.Time `gorm:"index"`
 	PreviewEnd        *time.Time
 	UpdateConfidence  string `gorm:"size:16"` // official|inferred|agent
-	PreviewConfidence string `gorm:"size:16"`
+	PreviewConfidence string `gorm:"size:16"` // official|inferred|agent|none
 	UpdateEvidence    string
 	PreviewEvidence   string
-	AnnouncementID    *uint
-	GeneratedAt       time.Time `gorm:"index:idx_predictions_game_generated"`
+	// IsPhaseUpdate marks Endfield-style mid-version content updates that
+	// carry no preview stream of their own.
+	IsPhaseUpdate  bool
+	AnnouncementID *uint
+	GeneratedAt    time.Time `gorm:"index:idx_predictions_game_generated"`
 	// Active is true only for the newest non-superseded plan per game.
 	Active bool `gorm:"index"`
 	// SupersededBy points at the prediction that replaced this one.
 	SupersededBy *uint
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+}
+
+// GameStats is the calibration derived from the backfilled version history:
+// the numbers the planner prefers over the static per-game defaults once at
+// least three versions are known.
+type GameStats struct {
+	GameID             string `gorm:"primaryKey;size:16"`
+	SampleCount        int    // versions used for the medians
+	CycleDays          int    // median update-to-update distance
+	UpdateWeekday      int    // modal update weekday (0=Sunday)
+	PreviewLeadDays    int    // median preview-to-update distance
+	PreviewWeekday     int    // modal preview weekday
+	PreviewStartMinute int    // modal preview minute-of-day
+	AnnounceHour       int    // modal hour of update-notice publication
+	ComputedAt         time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // Override is the Agent/human correction layer for one game. It layers over
@@ -117,5 +142,10 @@ type CollectState struct {
 	LastCycleOK  int // games with status ok
 	LastCycleAll int // games attempted
 	LastError    string
-	UpdatedAt    time.Time
+	// Bootstrap guides the first initialization: "", "running", "done".
+	BootstrapState string `gorm:"size:16;default:"`
+	BootstrapAt    *time.Time
+	// NextRunAt is when the adaptive scheduler will next wake (observability).
+	NextRunAt *time.Time
+	UpdatedAt time.Time
 }

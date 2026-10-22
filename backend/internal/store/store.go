@@ -59,6 +59,7 @@ func Open(path string, logger *slog.Logger) (*gorm.DB, error) {
 		&model.Post{},
 		&model.Version{},
 		&model.Prediction{},
+		&model.GameStats{},
 		&model.Override{},
 		&model.CollectState{},
 	); err != nil {

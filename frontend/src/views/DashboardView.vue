@@ -90,15 +90,17 @@ const agendaEvents = computed<AgendaEvent[]>(() => {
   const push = (
     gameId: string, kind: 'update' | 'preview', unix: number, version: string,
     confidence: string | undefined, evidence: string | undefined, url: string | undefined,
+    kindLabel?: string,
   ) => {
     const game = gameById.get(gameId)
     if (!game) return
     if (selectedGames.value.length > 0 && !selectedGames.value.includes(gameId)) return
     const versionText = version ? ` ${version}` : ''
+    const label = kindLabel ?? (kind === 'preview' ? '版本前瞻直播' : '版本更新')
     out.push({
       key: `${gameId}-${kind}-${unix}`,
       gameId, gameName: game.name, kind, unix,
-      title: `${game.name}${versionText} ${kind === 'preview' ? '版本前瞻直播' : '版本更新'}`,
+      title: `${game.name}${versionText} ${label}`,
       confidence, evidence, url,
       cover: kind === 'update' ? game.cover : undefined,
       fallback: game.fallback,
@@ -107,7 +109,8 @@ const agendaEvents = computed<AgendaEvent[]>(() => {
   for (const prediction of predictions.value) {
     if (prediction.update) {
       push(prediction.game_id, 'update', prediction.update.unix_seconds, prediction.version,
-        prediction.update_confidence, prediction.update_evidence, prediction.announcement_url)
+        prediction.update_confidence, prediction.update_evidence, prediction.announcement_url,
+        prediction.is_phase_update ? '阶段内容更新' : undefined)
     }
     if (prediction.preview) {
       push(prediction.game_id, 'preview', prediction.preview.unix_seconds, prediction.version,

@@ -43,7 +43,7 @@ func TestHSR46PlanNext(t *testing.T) {
 		"4.6版本「长夜未明」版本更新说明",
 		"亲爱的开拓者：\n■更新时间 2026/09/28 06:00\n4.6版本的持续时间为 2026/09/28 4.6版本更新后 - 2026/11/11 06:00。",
 		published, game(games.HSR))
-	plan := PlanNext(game(games.HSR), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil, nil)
+	plan := PlanNext(game(games.HSR), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil, nil, nil)
 	if plan == nil {
 		t.Fatal("plan is nil")
 	}
@@ -65,7 +65,7 @@ func TestGenshin71Cadence(t *testing.T) {
 	if !current.VersionEnd.IsZero() {
 		t.Fatalf("versionEnd = %s, want zero", current.VersionEnd)
 	}
-	plan := PlanNext(game(games.Genshin), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil, nil)
+	plan := PlanNext(game(games.Genshin), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil, nil, nil)
 	if plan == nil {
 		t.Fatal("plan is nil")
 	}
@@ -82,11 +82,11 @@ func TestZZZ32Rolling(t *testing.T) {
 		published, game(games.ZZZ))
 	assertISO(t, "versionEnd", current.VersionEnd.Format(time.RFC3339), "2026-10-21T06:00:00+08:00")
 
-	during := PlanNext(game(games.ZZZ), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil, nil)
+	during := PlanNext(game(games.ZZZ), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil, nil, nil)
 	assertISO(t, "during version", during.Version, "3.3")
 	assertISO(t, "during update", during.UpdateStart.Format(time.RFC3339), "2026-10-21T06:00:00+08:00")
 
-	after := PlanNext(game(games.ZZZ), &current, utcMoment(t, "2026-10-21T04:00:00Z"), nil, nil)
+	after := PlanNext(game(games.ZZZ), &current, utcMoment(t, "2026-10-21T04:00:00Z"), nil, nil, nil)
 	assertISO(t, "after version", after.Version, "3.4")
 	assertISO(t, "after update", after.UpdateStart.Format(time.RFC3339), "2026-12-02T06:00:00+08:00")
 	assertISO(t, "after preview", after.PreviewStart.Format(time.RFC3339), "2026-11-20T19:30:00+08:00")
@@ -107,7 +107,7 @@ func TestZZZ33RealSummary(t *testing.T) {
 	assertISO(t, "updateEnd", current.UpdateEnd.Format(time.RFC3339), "2026-10-21T11:00:00+08:00")
 	assertISO(t, "versionEnd", current.VersionEnd.Format(time.RFC3339), "2026-12-02T06:00:00+08:00")
 
-	plan := PlanNext(game(games.ZZZ), &current, utcMoment(t, "2026-10-20T23:00:00Z"), nil, nil)
+	plan := PlanNext(game(games.ZZZ), &current, utcMoment(t, "2026-10-20T23:00:00Z"), nil, nil, nil)
 	assertISO(t, "version", plan.Version, "3.4")
 	assertISO(t, "updateStart", plan.UpdateStart.Format(time.RFC3339), "2026-12-02T06:00:00+08:00")
 	assertISO(t, "updateEnd", plan.UpdateEnd.Format(time.RFC3339), "2026-12-02T11:00:00+08:00")
@@ -124,7 +124,7 @@ func TestWuWa37Window(t *testing.T) {
 	assertISO(t, "updateStart", current.UpdateStart.Format(time.RFC3339), "2026-09-30T04:00:00+08:00")
 	assertISO(t, "updateEnd", current.UpdateEnd.Format(time.RFC3339), "2026-09-30T11:00:00+08:00")
 
-	plan := PlanNext(game(games.WuWa), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil, nil)
+	plan := PlanNext(game(games.WuWa), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil, nil, nil)
 	assertISO(t, "updateStart", plan.UpdateStart.Format(time.RFC3339), "2026-11-11T04:00:00+08:00")
 	assertISO(t, "previewStart", plan.PreviewStart.Format(time.RFC3339), "2026-10-30T19:30:00+08:00")
 }
@@ -138,9 +138,131 @@ func TestEndfieldPhaseUpdate(t *testing.T) {
 	assertISO(t, "updateStart", current.UpdateStart.Format(time.RFC3339), "2026-10-15T06:00:00+08:00")
 	assertISO(t, "phaseUpdate", current.PhaseUpdate.Format(time.RFC3339), "2026-11-12T06:00:00+08:00")
 
-	plan := PlanNext(game(games.Endfield), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil, nil)
+	plan := PlanNext(game(games.Endfield), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil, nil, nil)
+	if plan == nil {
+		t.Fatal("plan is nil")
+	}
 	assertISO(t, "updateStart", plan.UpdateStart.Format(time.RFC3339), "2026-11-12T06:00:00+08:00")
-	assertISO(t, "previewStart", plan.PreviewStart.Format(time.RFC3339), "2026-10-30T19:30:00+08:00")
+	// A phase update is mid-version content, not a new version: the version is
+	// not bumped and no preview stream is fabricated for it.
+	if !plan.IsPhaseUpdate {
+		t.Error("IsPhaseUpdate = false, want true")
+	}
+	if !plan.PreviewStart.IsZero() {
+		t.Errorf("previewStart = %s, want none for a phase update", plan.PreviewStart)
+	}
+	assertISO(t, "previewConfidence", plan.PreviewConfidence, "none")
+	assertISO(t, "previewEvidence", plan.PreviewEvidence, "阶段内容更新，通常无前瞻直播")
+}
+
+func TestEndfieldPhaseExplicitPreviewStillWins(t *testing.T) {
+	published := utcMoment(t, "2026-10-12T04:00:00Z")
+	current := ParseArticle(
+		"「丹青渡」版本更新说明",
+		"版本更新维护将于 2026/10/15 06:00 - 2026/10/15 12:00（UTC+8）进行。\n2026/11/12 12:00 将开启新一期内容更新。",
+		published, game(games.Endfield))
+	plan := PlanNext(game(games.Endfield), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil,
+		[]Announcement{{
+			Text:    "《明日方舟：终末地》新一期内容前瞻直播定于11月7日19:30播出。",
+			Pubdate: utcMoment(t, "2026-10-20T04:00:00Z"),
+		}}, nil)
+	if !plan.IsPhaseUpdate {
+		t.Error("IsPhaseUpdate = false, want true")
+	}
+	assertISO(t, "previewStart", plan.PreviewStart.Format(time.RFC3339), "2026-11-07T19:30:00+08:00")
+	assertISO(t, "previewConfidence", plan.PreviewConfidence, "official")
+}
+
+func TestSensitiveDateShiftsInferredPreview(t *testing.T) {
+	// Update 2026-12-16: the Friday rule lands on 12-13, the National Memorial
+	// Day — an inferred slot must be pushed to the next day.
+	published := utcMoment(t, "2026-11-20T04:00:00Z")
+	current := ParseArticle(
+		"4.8版本更新说明",
+		"■更新时间 2026/11/25 06:00\n4.8版本的持续时间为 2026/11/25 4.8版本更新后 - 2027/01/06 06:00。",
+		published, game(games.HSR))
+	plan := PlanNext(game(games.HSR), &current, utcMoment(t, "2026-11-20T16:00:00Z"), nil, nil, nil)
+	assertISO(t, "updateStart", plan.UpdateStart.Format(time.RFC3339), "2027-01-06T06:00:00+08:00")
+	// Friday rule: 2026-12-25; 12-26 is inside the Memorial Day tolerance (12-13
+	// is not hit here) — construct the collision directly instead.
+	if _, blocked := SensitiveOn(cst(t, "2026-12-13T19:30:00+08:00")); !blocked {
+		t.Fatal("12-13 should be sensitive")
+	}
+	shifted, _, moved := ShiftFromSensitive(cst(t, "2026-12-13T19:30:00+08:00"))
+	if !moved {
+		t.Fatal("expected a shift off 12-13")
+	}
+	// 12-14 sits inside the memorial-day tolerance (±1 day); the first free
+	// day is 12-15.
+	assertISO(t, "shifted", shifted.Format(time.RFC3339), "2026-12-15T19:30:00+08:00")
+}
+
+func TestSensitiveWindowDetection(t *testing.T) {
+	cases := []struct {
+		at      string
+		blocked bool
+	}{
+		{"2026-03-05T19:30:00+08:00", true},  // 两会
+		{"2026-10-01T19:30:00+08:00", true},  // 国庆周
+		{"2026-09-18T19:30:00+08:00", true},  // 九一八
+		{"2026-12-13T19:30:00+08:00", true},  // 国家公祭日
+		{"2026-10-24T19:30:00+08:00", false}, // plain Saturday
+		{"2026-05-15T19:30:00+08:00", false},
+	}
+	for _, c := range cases {
+		if _, blocked := SensitiveOn(cst(t, c.at)); blocked != c.blocked {
+			t.Errorf("SensitiveOn(%s) = %v, want %v", c.at, blocked, c.blocked)
+		}
+	}
+}
+
+func TestVendorStaggerThirtyMinutes(t *testing.T) {
+	plans := map[games.GameID]*Plan{
+		games.Genshin: {PreviewStart: cst(t, "2026-10-23T19:30:00+08:00"), PreviewConfidence: "inferred"},
+		games.HSR:     {PreviewStart: cst(t, "2026-10-23T19:30:00+08:00"), PreviewConfidence: "inferred"},
+	}
+	StaggerVendorPreviews(plans)
+	assertISO(t, "genshin keeps slot",
+		plans[games.Genshin].PreviewStart.Format(time.RFC3339), "2026-10-23T19:30:00+08:00")
+	assertISO(t, "hsr +30min",
+		plans[games.HSR].PreviewStart.Format(time.RFC3339), "2026-10-23T20:00:00+08:00")
+	if plans[games.HSR].PreviewEnd.IsZero() {
+		t.Error("staggered preview end not set")
+	}
+}
+
+func TestVendorStaggerOfficialUntouched(t *testing.T) {
+	plans := map[games.GameID]*Plan{
+		games.Genshin: {PreviewStart: cst(t, "2026-10-23T19:30:00+08:00"), PreviewConfidence: "official"},
+		games.HSR:     {PreviewStart: cst(t, "2026-10-23T19:30:00+08:00"), PreviewConfidence: "inferred"},
+	}
+	StaggerVendorPreviews(plans)
+	// Only one inferred plan participates; no collision to resolve.
+	assertISO(t, "hsr stays",
+		plans[games.HSR].PreviewStart.Format(time.RFC3339), "2026-10-23T19:30:00+08:00")
+}
+
+func TestCadenceBasedPreview(t *testing.T) {
+	// Calibrated HSR-like cadence: previews lead the update by 12 days on a
+	// Friday at 19:30 — for update 2026-11-25 (Wednesday) that is 11-13.
+	published := utcMoment(t, "2026-10-20T04:00:00Z")
+	current := ParseArticle(
+		"4.7版本更新说明",
+		"■更新时间 2026/11/11 06:00",
+		published, game(games.HSR))
+	cadence := &Cadence{
+		SampleCount:        8,
+		CycleDays:          42,
+		UpdateWeekday:      3,
+		PreviewLeadDays:    12,
+		PreviewWeekday:     5,
+		PreviewStartMinute: 19*60 + 30,
+	}
+	plan := PlanNext(game(games.HSR), &current, utcMoment(t, "2026-11-15T16:00:00Z"), nil, nil, cadence)
+	assertISO(t, "updateStart", plan.UpdateStart.Format(time.RFC3339), "2026-12-23T06:00:00+08:00")
+	// Lead 12d from 12-23 = 12-11 (Friday): matches the modal weekday directly.
+	assertISO(t, "previewStart", plan.PreviewStart.Format(time.RFC3339), "2026-12-11T19:30:00+08:00")
+	assertISO(t, "previewEvidence", plan.PreviewEvidence, "按历史前瞻节奏推算")
 }
 
 func TestNTE14Cadence(t *testing.T) {
@@ -152,7 +274,7 @@ func TestNTE14Cadence(t *testing.T) {
 	assertISO(t, "updateStart", current.UpdateStart.Format(time.RFC3339), "2026-09-24T06:00:00+08:00")
 	assertISO(t, "updateEnd", current.UpdateEnd.Format(time.RFC3339), "2026-09-24T11:00:00+08:00")
 
-	plan := PlanNext(game(games.NTE), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil, nil)
+	plan := PlanNext(game(games.NTE), &current, utcMoment(t, "2026-10-20T16:00:00Z"), nil, nil, nil)
 	assertISO(t, "updateStart", plan.UpdateStart.Format(time.RFC3339), "2026-11-05T06:00:00+08:00")
 	assertISO(t, "previewStart", plan.PreviewStart.Format(time.RFC3339), "2026-10-23T19:30:00+08:00")
 }
@@ -191,7 +313,7 @@ func TestAnnouncedPreviewWins(t *testing.T) {
 		[]Announcement{{
 			Text:    "4.7版本前瞻特别节目将于10月31日19:00播出，敬请期待。",
 			Pubdate: utcMoment(t, "2026-10-20T04:00:00Z"),
-		}})
+		}}, nil)
 	assertISO(t, "previewStart", plan.PreviewStart.Format(time.RFC3339), "2026-10-31T19:00:00+08:00")
 	assertISO(t, "previewConfidence", plan.PreviewConfidence, "official")
 }
@@ -245,7 +367,7 @@ func TestCharacterTeaserFiltered(t *testing.T) {
 		[]Video{{
 			BVID: "BV1role", Title: "《崩坏：星穹铁道》4.7版本角色前瞻",
 			Pubdate: utcMoment(t, "2026-10-20T04:00:00Z"),
-		}}, nil)
+		}}, nil, nil)
 	// Version matches but the title is filtered; falls back to the Friday rule.
 	assertISO(t, "previewStart", plan.PreviewStart.Format(time.RFC3339), "2026-10-30T19:30:00+08:00")
 	assertISO(t, "previewConfidence", plan.PreviewConfidence, "inferred")
@@ -280,7 +402,7 @@ func TestCalibrationSnapshot20261021(t *testing.T) {
 	}
 	for _, r := range rows {
 		current := ParseArticle(r.title, r.body, utcMoment(t, r.published), game(r.id))
-		plan := PlanNext(game(r.id), &current, now, nil, nil)
+		plan := PlanNext(game(r.id), &current, now, nil, nil, nil)
 		if plan == nil {
 			t.Fatalf("%s: plan is nil", r.id)
 		}

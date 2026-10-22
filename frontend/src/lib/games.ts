@@ -18,6 +18,7 @@ export const CONFIDENCE_LABELS: Record<string, string> = {
   official: '官方',
   inferred: '推算',
   agent: '校正',
+  none: '无前瞻',
 }
 
 export function confidenceLabel(value?: string): string {
@@ -29,6 +30,7 @@ export function confidenceClass(value?: string): string {
   switch (value) {
     case 'official': return 'badge-official'
     case 'agent': return 'badge-agent'
+    case 'none': return 'badge-none'
     default: return 'badge-inferred'
   }
 }

@@ -282,8 +282,14 @@ func (f *FlexInt64) UnmarshalJSON(data []byte) error {
 }
 
 func (c *Client) ArticleList(ctx context.Context, mid string) ([]Article, error) {
+	return c.ArticleListPage(ctx, mid, 1)
+}
+
+// ArticleListPage reads one page of the official column list (newest first).
+func (c *Client) ArticleListPage(ctx context.Context, mid string, page int) ([]Article, error) {
 	data, err := c.get(ctx,
-		"/x/space/article?mid="+url.QueryEscape(mid)+"&pn=1&ps=30&sort=publish_time",
+		"/x/space/article?mid="+url.QueryEscape(mid)+
+			"&pn="+strconv.Itoa(page)+"&ps=30&sort=publish_time",
 		1200*time.Millisecond, 2,
 		"https://space.bilibili.com/"+url.QueryEscape(mid)+"/article", true)
 	if err != nil {
@@ -344,11 +350,11 @@ type Archive struct {
 
 // upMid appears as `upMid` (camel case) in series rows; decode via alias.
 type seriesArchive struct {
-	BVID    string      `json:"bvid"`
-	Title   string      `json:"title"`
-	Pubdate int64       `json:"pubdate"`
-	UpMid   FlexString  `json:"upMid"`
-	Pic     string      `json:"pic"`
+	BVID    string     `json:"bvid"`
+	Title   string     `json:"title"`
+	Pubdate int64      `json:"pubdate"`
+	UpMid   FlexString `json:"upMid"`
+	Pic     string     `json:"pic"`
 }
 
 // FeatureVideos lists official collection uploads matching a keyword.

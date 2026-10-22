@@ -16,8 +16,16 @@ type Config struct {
 	DBPath string
 	// Directory where collected cover images are written. Default ./data/covers.
 	CoversDir string
-	// Interval between full collection cycles. Default 6h.
+	// BaseInterval: quiet-period per-game poll distance. Default 3h.
 	RefreshInterval time.Duration
+	// WatchInterval: poll distance inside an event watch window (off-peak
+	// hours). Default 30m.
+	WatchInterval time.Duration
+	// PrimeInterval: poll distance inside a watch window during the hours
+	// publishers actually post (07:00–14:00 / 18:00–23:00 CST). Default 15m.
+	PrimeInterval time.Duration
+	// Scheduler wake granularity. Default 5m.
+	TickInterval time.Duration
 	// Delay between collection cycles at startup (let migrations settle).
 	StartupDelay time.Duration
 	// Bearer token protecting /api/admin/*. Empty disables admin routes.
@@ -26,6 +34,8 @@ type Config struct {
 	PublicURL string
 	// Collect at startup if the last cycle is older than RefreshInterval/2.
 	CollectOnStart bool
+	// Run the guided history backfill when the version table is thin.
+	BootstrapOnStart bool
 }
 
 func env(key, fallback string) string {
@@ -61,7 +71,19 @@ func envBool(key string, fallback bool) bool {
 
 // Load builds a Config from the environment.
 func Load() (Config, error) {
-	refreshInterval, err := envDuration("REFRESH_INTERVAL", 6*time.Hour)
+	refreshInterval, err := envDuration("REFRESH_INTERVAL", 3*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	watchInterval, err := envDuration("WATCH_INTERVAL", 30*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	primeInterval, err := envDuration("PRIME_INTERVAL", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	tickInterval, err := envDuration("TICK_INTERVAL", 5*time.Minute)
 	if err != nil {
 		return Config{}, err
 	}
@@ -71,13 +93,17 @@ func Load() (Config, error) {
 	}
 	dataDir := env("DATA_DIR", "data")
 	return Config{
-		Addr:            env("ADDR", "127.0.0.1:8787"),
-		DBPath:          env("DB_PATH", dataDir+"/gacha.db"),
-		CoversDir:       env("COVERS_DIR", dataDir+"/covers"),
-		RefreshInterval: refreshInterval,
-		StartupDelay:    startupDelay,
-		AdminToken:      os.Getenv("ADMIN_TOKEN"),
-		PublicURL:       os.Getenv("PUBLIC_URL"),
-		CollectOnStart:  envBool("COLLECT_ON_START", true),
+		Addr:             env("ADDR", "127.0.0.1:8787"),
+		DBPath:           env("DB_PATH", dataDir+"/gacha.db"),
+		CoversDir:        env("COVERS_DIR", dataDir+"/covers"),
+		RefreshInterval:  refreshInterval,
+		WatchInterval:    watchInterval,
+		PrimeInterval:    primeInterval,
+		TickInterval:     tickInterval,
+		StartupDelay:     startupDelay,
+		AdminToken:       os.Getenv("ADMIN_TOKEN"),
+		PublicURL:        os.Getenv("PUBLIC_URL"),
+		CollectOnStart:   envBool("COLLECT_ON_START", true),
+		BootstrapOnStart: envBool("BOOTSTRAP_ON_START", true),
 	}, nil
 }

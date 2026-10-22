@@ -12,6 +12,24 @@
 | `/etc/nginx/sites-available/gacha-origin.modenc.top` | nginx 站点（ccg-origin 通配符证书） |
 | systemd | `gacha-calendar.service` + `gacha-calendar-backup.{service,timer}` |
 
+## 采集调度（自适应）
+
+调度按"事件窗口"分级，无需手工配置；如 env 文件里显式设置了 `REFRESH_INTERVAL=6h`，
+建议删除以启用新的 3h 默认值：
+
+| 变量 | 默认 | 含义 |
+|---|---|---|
+| `REFRESH_INTERVAL` | `3h` | 平静期每游戏的基础轮询间隔 |
+| `WATCH_INTERVAL` | `30m` | 事件窗口内（预告发布前 5–7 天至事件次日）的轮询间隔 |
+| `PRIME_INTERVAL` | `15m` | 事件窗口内且处于发布黄金时段（07:00–14:00 / 18:00–23:00 国服时间）的轮询间隔 |
+| `TICK_INTERVAL` | `5m` | 调度器唤醒粒度 |
+| `BOOTSTRAP_ON_START` | `true` | 版本历史不足时启动自动回填（历史公告 → 校准统计） |
+
+首次部署（或库太薄）时服务会自动执行引导回填：拉取各官号约 18 个月的更新公告重建
+`versions` 表、回填历史前瞻时间，并推导每游戏的真实节奏（周期天数、更新星期、前瞻
+提前天数等）供推测使用。可用 `POST /api/admin/bootstrap` 手动重跑，进度看
+`/api/meta` 的 `bootstrap` 字段。
+
 ## 域名与缓存
 
 - 源站：`gacha-origin.modenc.top`（CDN 回源）

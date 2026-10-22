@@ -105,6 +105,21 @@ func dayDiff(from, to time.Time) (int, bool) {
 	return int(mathRound(to.Sub(from).Hours() / 24)), true
 }
 
+// DayDiffPublic exposes the rounded CST day distance for the collector's
+// backfill matching.
+func DayDiffPublic(from, to time.Time) (int, bool) { return dayDiff(from, to) }
+
+// CSTEndAtDefault returns the usual preview end for a start instant (the
+// game's default window end on the same calendar day).
+func CSTEndAtDefault(start time.Time, game games.Game) (time.Time, bool) {
+	_, endMinutes := game.PreviewWindow()
+	end := atMinutes(start, endMinutes)
+	if end.IsZero() {
+		return time.Time{}, false
+	}
+	return end, true
+}
+
 func mathRound(v float64) float64 {
 	if v < 0 {
 		return float64(int(v - 0.5))
@@ -677,38 +692,54 @@ func MergeArticle(summary, full *ArticleFacts) ArticleFacts {
 // Plan is the decided next-version schedule with its evidence trail.
 type Plan struct {
 	Version           string
+	VersionName       string
 	UpdateStart       time.Time
 	UpdateEnd         time.Time
 	PreviewStart      time.Time
 	PreviewEnd        time.Time
 	UpdateConfidence  string // official|inferred|agent
-	PreviewConfidence string
+	PreviewConfidence string // official|inferred|agent|none
 	UpdateEvidence    string
 	PreviewEvidence   string
+	// IsPhaseUpdate marks Endfield-style mid-version content updates: a real
+	// calendar milestone, but not a new version — normally no preview stream.
+	IsPhaseUpdate bool
 }
 
-// PlanNext decides the next version's update and preview times, ported from
-// the plugin with identical priorities:
+// HasPreview reports whether the plan expects a preview program.
+func (p *Plan) HasPreview() bool {
+	return p != nil && !p.PreviewStart.IsZero()
+}
+
+// PlanNext decides the next version's update and preview times:
 //
 //  1. official end of the current version
-//  2. a content-update date in an irregular cadence (Endfield)
+//  2. a content-update date in an irregular cadence (Endfield) — a phase
+//     update, not a new version: no preview is fabricated for it
 //  3. explicit "next version goes live" announcement
-//  4. arithmetic cadence aligned to the current version's weekday
+//  4. cadence arithmetic (calibrated stats when available, else the static
+//     cycle length) aligned to the modal weekday
 //  5. a version whose maintenance already ended is history: roll forward
-//     (at most 16 times)
-//  6. preview: explicit announcement > official preview video > Friday rule
-func PlanNext(game games.Game, current *ArticleFacts, now time.Time, videos []Video, announcements []Announcement) *Plan {
+//  6. preview: explicit announcement (validated against the update window) >
+//     official preview video > calibrated rule > Friday rule; inferred slots
+//     avoid sensitive dates, and same-vendor collisions are staggered by the
+//     caller via StaggerVendorPreviews
+func PlanNext(game games.Game, current *ArticleFacts, now time.Time,
+	videos []Video, announcements []Announcement, cadence *Cadence) *Plan {
 	if current == nil {
 		return nil
 	}
 	version := current.Version
+	versionName := current.VersionName
 	baseStart := current.UpdateStart
 
 	type candidate struct {
-		version     string
-		updateStart time.Time
-		confidence  string
-		evidence    string
+		version      string
+		updateStart  time.Time
+		confidence   string
+		evidence     string
+		isPhase      bool
+		suppressLive bool // phase update: no preview stream to predict
 	}
 	var chosen *candidate
 
@@ -721,12 +752,17 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time, videos []Vi
 		}
 	}
 
-	if chosen == nil && !current.PhaseUpdate.IsZero() {
+	if chosen == nil && !current.PhaseUpdate.IsZero() &&
+		current.PhaseUpdate.After(now.Add(-2*day)) {
 		chosen = &candidate{
-			version:     games.BumpVersion(version),
-			updateStart: current.PhaseUpdate,
-			confidence:  "inferred",
-			evidence:    "公告中的版本内容更新时间",
+			// A phase update belongs to the current version — the number is
+			// not bumped and no preview is invented for it.
+			version:      version,
+			updateStart:  current.PhaseUpdate,
+			confidence:   "inferred",
+			evidence:     "公告中的阶段内容更新时间",
+			isPhase:      true,
+			suppressLive: true,
 		}
 	}
 
@@ -756,15 +792,12 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time, videos []Vi
 	}
 
 	if chosen == nil && !baseStart.IsZero() {
-		weekday := 3
-		if p, ok := CSTParts(baseStart); ok {
-			weekday = p.Weekday
-		}
+		weekday := EffectiveUpdateWeekday(baseStart, cadence)
 		chosen = &candidate{
 			version:     games.BumpVersion(version),
-			updateStart: AlignToWeekday(addDays(baseStart, game.CycleDays), weekday),
+			updateStart: AlignToWeekday(addDays(baseStart, EffectiveCycleDays(game, cadence)), weekday),
 			confidence:  "inferred",
-			evidence:    fmt.Sprintf("%d 天版本节奏", game.CycleDays),
+			evidence:    fmt.Sprintf("%d 天版本节奏", EffectiveCycleDays(game, cadence)),
 		}
 	}
 
@@ -780,22 +813,31 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time, videos []Vi
 		}
 		baseStart = chosen.updateStart
 		version = chosen.version
-		weekday := 3
-		if p, ok := CSTParts(baseStart); ok {
-			weekday = p.Weekday
-		}
+		versionName = ""
+		weekday := EffectiveUpdateWeekday(baseStart, cadence)
 		chosen = &candidate{
 			version:     games.BumpVersion(version),
-			updateStart: AlignToWeekday(addDays(baseStart, game.CycleDays), weekday),
+			updateStart: AlignToWeekday(addDays(baseStart, EffectiveCycleDays(game, cadence)), weekday),
 			confidence:  "inferred",
-			evidence:    fmt.Sprintf("%d 天版本节奏", game.CycleDays),
+			evidence:    fmt.Sprintf("%d 天版本节奏", EffectiveCycleDays(game, cadence)),
 		}
 	}
 
 	updateStart := chosen.updateStart
 	updateEnd := DefaultUpdateEnd(updateStart, game)
 
-	// Preview: explicit announcement > official preview video > Friday rule.
+	// Surface (but do not move) an inferred update that lands on a sensitive
+	// date — publishers do shift maintenance around those windows.
+	updateEvidence := chosen.evidence
+	if chosen.confidence == "inferred" {
+		if name, blocked := SensitiveOn(updateStart); blocked {
+			updateEvidence = fmt.Sprintf("%s（临近%s，官方可能调整）", chosen.evidence, name)
+		}
+	}
+
+	// Preview: explicit announcement > official preview video > calibrated
+	// rule > Friday rule. Phase updates predict no stream unless an explicit
+	// announcement names one.
 	var previewStart, previewEnd time.Time
 	previewConfidence := ""
 	previewEvidence := ""
@@ -809,6 +851,17 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time, videos []Vi
 			chosen.version != "" && m[1] != chosen.version {
 			continue
 		}
+		// Sanity window: the stream must sit within the month before the
+		// update it belongs to, and not deep in the past.
+		if !parsed.PreviewAt.Before(updateStart) {
+			continue
+		}
+		if !parsed.PreviewAt.After(now.Add(-2 * day)) {
+			continue
+		}
+		if lead, ok := dayDiff(parsed.PreviewAt, updateStart); !ok || lead > 28 {
+			continue
+		}
 		previewStart = parsed.PreviewAt
 		if explicit, ok := ExtractExplicitPreviewAt(item.Text, item.Pubdate); ok && explicit.Equal(previewStart) {
 			previewConfidence = "official"
@@ -820,7 +873,7 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time, videos []Vi
 		break
 	}
 
-	if previewStart.IsZero() {
+	if previewStart.IsZero() && !chosen.suppressLive {
 		var matching []Video
 		for _, video := range videos {
 			if !IsPreviewTitle(video.Title) {
@@ -842,7 +895,8 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time, videos []Vi
 		}
 		if len(matching) > 0 {
 			video := matching[0]
-			if at, ok := PreviewFromVideo(video, game, updateStart); ok {
+			if at, ok := PreviewFromVideo(video, game, updateStart); ok &&
+				at.Before(updateStart) && at.After(now.Add(-2*day)) {
 				previewStart = at
 				explicit, hasExplicit := ExtractExplicitPreviewAt(video.Title, video.Pubdate)
 				if hasExplicit && explicit.Equal(previewStart) {
@@ -856,11 +910,19 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time, videos []Vi
 		}
 	}
 
-	if previewStart.IsZero() {
+	if previewStart.IsZero() && !chosen.suppressLive {
+		if at, ok := PreviewByCadence(updateStart, game, cadence); ok {
+			previewStart = at
+			previewConfidence = "inferred"
+			previewEvidence = "按历史前瞻节奏推算"
+		}
+	}
+
+	if previewStart.IsZero() && !chosen.suppressLive {
 		if at, ok := PreviewByRule(updateStart, game); ok {
 			previewStart = at
 			previewConfidence = "inferred"
-			previewEvidence = "更新时间前两周的周五 19:30"
+			previewEvidence = "更新时间前两周的周五 " + game.PreviewStart
 		}
 	}
 
@@ -869,23 +931,38 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time, videos []Vi
 			previewStart = at
 		}
 		previewConfidence = "inferred"
-		previewEvidence = "更新时间前两周的周五 19:30"
+		previewEvidence = "更新时间前两周的周五 " + game.PreviewStart
 	}
 
-	if !previewStart.IsZero() {
+	// Inferred slots step out of sensitive windows (official times never move).
+	if previewConfidence == "inferred" && !previewStart.IsZero() {
+		if shifted, name, moved := ShiftFromSensitive(previewStart); moved {
+			previewStart = shifted
+			previewEvidence = fmt.Sprintf("%s（避开%s）", previewEvidence, name)
+		}
+	}
+
+	if previewStart.IsZero() {
+		if chosen.suppressLive {
+			previewConfidence = "none"
+			previewEvidence = "阶段内容更新，通常无前瞻直播"
+		}
+	} else {
 		_, endMinutes := game.PreviewWindow()
 		previewEnd = atMinutes(previewStart, endMinutes)
 	}
 
 	return &Plan{
 		Version:           chosen.version,
+		VersionName:       versionName,
 		UpdateStart:       updateStart,
 		UpdateEnd:         updateEnd,
 		PreviewStart:      previewStart,
 		PreviewEnd:        previewEnd,
 		UpdateConfidence:  chosen.confidence,
 		PreviewConfidence: previewConfidence,
-		UpdateEvidence:    chosen.evidence,
+		UpdateEvidence:    updateEvidence,
 		PreviewEvidence:   previewEvidence,
+		IsPhaseUpdate:     chosen.isPhase,
 	}
 }

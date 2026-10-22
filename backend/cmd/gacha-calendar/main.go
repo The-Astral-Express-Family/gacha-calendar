@@ -60,7 +60,18 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if cfg.CollectOnStart {
-		collector.Start(ctx, cfg.RefreshInterval, cfg.StartupDelay)
+		collector.Start(ctx, collect.ScheduleOptions{
+			BaseInterval:  cfg.RefreshInterval,
+			WatchInterval: cfg.WatchInterval,
+			PrimeInterval: cfg.PrimeInterval,
+			TickInterval:  cfg.TickInterval,
+		}, cfg.StartupDelay)
+	}
+	// Guided first initialization: backfill the version history and derive
+	// the calibration stats when the database is still thin.
+	if cfg.BootstrapOnStart && collector.NeedsBootstrap() {
+		logger.Info("version history is thin, starting guided bootstrap")
+		collector.RequestBootstrap()
 	}
 
 	handler := server.New(api.Deps{

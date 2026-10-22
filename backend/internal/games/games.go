@@ -57,9 +57,32 @@ type Game struct {
 	ExcludeTitle  *regexp.Regexp // compensations, FAQs, optimization notes…
 	SeriesKeyword string         // official collection keyword
 	SearchKeyword string         // search fallback keyword
+	// Vendor groups same-publisher games (the three miHoYo titles). When two
+	// of them would land a preview on the same evening, the publishers either
+	// stagger by 30 minutes or push one stream to the next day; the planner
+	// mirrors that on inferred slots.
+	Vendor string
+	// StaggerRank orders same-vendor games when resolving an inferred
+	// preview collision (lower keeps the slot).
+	StaggerRank int
+	// Announcement watch: how many days before the expected preview the
+	// teaser post typically appears (drives the poll schedule).
+	TeaserLeadDays int
 	// Accent colors for the generated fallback visuals.
 	ColorFrom string
 	ColorTo   string
+}
+
+// IsPreviewTeaserTitle reports whether a post title announces an upcoming
+// preview program (the "前瞻预告" posts that state the stream date/time).
+// Replays use 回放/回顾, teasers of scenes/characters are excluded.
+var teaserNoise = regexp.MustCompile(`回放|回顾|短片|PV|预告片|实录|角色|场景`)
+
+func IsPreviewTeaserTitle(title string) bool {
+	return (strings.Contains(title, "前瞻") || strings.Contains(title, "直播")) &&
+		(strings.Contains(title, "预告") || strings.Contains(title, "定档") ||
+			strings.Contains(title, "节目")) &&
+		!teaserNoise.MatchString(title)
 }
 
 var All = []Game{
@@ -70,6 +93,7 @@ var All = []Game{
 		UpdateTitle:   regexp.MustCompile(`(\d+\.\d+)\s*版本更新说明`),
 		ExcludeTitle:  regexp.MustCompile(`性能|设备|FAQ|补偿|优化|问题修复`),
 		SeriesKeyword: "前瞻", SearchKeyword: "原神 前瞻",
+		Vendor: "mihoyo", StaggerRank: 1, TeaserLeadDays: 4,
 		ColorFrom: "#3b82f6", ColorTo: "#1e3a8a",
 	},
 	{
@@ -79,6 +103,7 @@ var All = []Game{
 		UpdateTitle:   regexp.MustCompile(`(\d+\.\d+)\s*版本[「『].*?[」』]\s*版本更新说明|(\d+\.\d+)\s*版本更新说明`),
 		ExcludeTitle:  regexp.MustCompile(`补偿|延长|优化|问题修复|FAQ`),
 		SeriesKeyword: "前瞻", SearchKeyword: "崩坏星穹铁道 前瞻",
+		Vendor: "mihoyo", StaggerRank: 2, TeaserLeadDays: 4,
 		ColorFrom: "#a78bfa", ColorTo: "#4c1d95",
 	},
 	{
@@ -88,6 +113,7 @@ var All = []Game{
 		UpdateTitle:   regexp.MustCompile(`(\d+\.\d+)\s*版本[「『].*?[」』]\s*更新(?:公告|说明)|(\d+\.\d+)\s*版本更新(?:公告|说明)`),
 		ExcludeTitle:  regexp.MustCompile(`FAQ|性能|设备|优化|问题修复`),
 		SeriesKeyword: "前瞻", SearchKeyword: "绝区零 前瞻",
+		Vendor: "mihoyo", StaggerRank: 3, TeaserLeadDays: 4,
 		ColorFrom: "#f59e0b", ColorTo: "#7c2d12",
 	},
 	{
@@ -97,6 +123,7 @@ var All = []Game{
 		UpdateTitle:   regexp.MustCompile(`(\d+\.\d+)\s*版本(?:内容说明|更新维护预告)`),
 		ExcludeTitle:  regexp.MustCompile(`补偿|优化|问题修复|FAQ`),
 		SeriesKeyword: "前瞻", SearchKeyword: "鸣潮 前瞻",
+		Vendor: "kuro", StaggerRank: 1, TeaserLeadDays: 5,
 		ColorFrom: "#22d3ee", ColorTo: "#155e75",
 	},
 	{
@@ -106,6 +133,7 @@ var All = []Game{
 		UpdateTitle:   regexp.MustCompile(`版本更新说明`),
 		ExcludeTitle:  regexp.MustCompile(`研发通讯|补偿|优化|问题修复|FAQ|测试`),
 		SeriesKeyword: "前瞻", SearchKeyword: "明日方舟 终末地 前瞻",
+		Vendor: "hypergryph", StaggerRank: 1, TeaserLeadDays: 6,
 		ColorFrom: "#84cc16", ColorTo: "#365314",
 	},
 	{
@@ -115,6 +143,7 @@ var All = []Game{
 		UpdateTitle:   regexp.MustCompile(`(\d+\.\d+)\s*版本[「『].*?[」』]\s*更新公告`),
 		ExcludeTitle:  regexp.MustCompile(`停服维护|补偿|优化|问题修复|FAQ`),
 		SeriesKeyword: "前瞻", SearchKeyword: "异环 前瞻",
+		Vendor: "nte", StaggerRank: 1, TeaserLeadDays: 5,
 		ColorFrom: "#f472b6", ColorTo: "#831843",
 	},
 }
@@ -177,6 +206,12 @@ func (g Game) PreviewWindow() (start, end int) {
 	s, _ := Minutes(g.PreviewStart)
 	e, _ := Minutes(g.PreviewEnd)
 	return s, e
+}
+
+// PreviewWindowMinute is the default preview start in minutes since midnight.
+func (g Game) PreviewWindowMinute() int {
+	s, _ := Minutes(g.PreviewStart)
+	return s
 }
 
 // BumpVersion maps "7.1" → "7.2"; empty stays empty (Endfield has no numeric version).
