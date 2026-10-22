@@ -24,8 +24,11 @@ type Deps struct {
 	Collector *collect.Collector
 	// Bili is the shared Bilibili client; its optional login session is what
 	// the admin QR-login endpoints install.
-	Bili            *bili.Client
-	BiliSessions    *bili.SessionStore
+	Bili         *bili.Client
+	BiliSessions *bili.SessionStore
+	// BiliRefresher drives the passport cookie rotation that keeps the login
+	// alive; the admin refresh endpoint triggers it manually.
+	BiliRefresher   *bili.SessionRefresher
 	AdminToken      string
 	RefreshInterval time.Duration
 	Version         string
@@ -55,6 +58,7 @@ func Register(mux *http.ServeMux, d Deps) {
 		mux.HandleFunc("GET /api/admin/bili/login", h.admin(h.biliLoginStatus))
 		mux.HandleFunc("GET /api/admin/bili/login/qr.png", h.admin(h.biliLoginQRPNG))
 		mux.HandleFunc("POST /api/admin/bili/login/poll", h.admin(h.biliLoginPoll))
+		mux.HandleFunc("POST /api/admin/bili/login/refresh", h.admin(h.biliLoginRefresh))
 		mux.HandleFunc("DELETE /api/admin/bili/login", h.admin(h.biliLoginDelete))
 	}
 }

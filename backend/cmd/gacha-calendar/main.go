@@ -69,9 +69,9 @@ func main() {
 		logger.Warn("bilibili session file unreadable, continuing anonymously", "error", err.Error())
 	} else if session != nil {
 		if session.Expired(time.Now()) {
-			logger.Warn("bilibili session expired, continuing anonymously",
+			logger.Warn("bilibili session past its expiry on disk; the refresher will still probe passport",
 				"expired_at", session.ExpiresAt.Format(time.RFC3339),
-				"hint", "re-run `gacha-calendar bili-login` on the server")
+				"hint", "若自动续期失败（登录已失效），在服务器重新执行 `gacha-calendar bili-login`")
 		} else {
 			client.SetSessionCookie(session.Cookie)
 			logger.Info("bilibili session restored", "mid", session.Mid, "uname", session.Uname)
@@ -79,9 +79,14 @@ func main() {
 	}
 	downloader := covers.New(cfg.CoversDir, client, logger)
 	collector := collect.New(db, client, downloader, logger)
+	// Keeps the login ahead of its ~180d expiry: inside the final month the
+	// stored cookie is rotated through passport, saved back to the session
+	// file and swapped into the client live — no re-scan, no restart.
+	refresher := bili.NewSessionRefresher(client, sessions, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go refresher.Run(ctx)
 	if cfg.CollectOnStart {
 		collector.Start(ctx, collect.ScheduleOptions{
 			BaseInterval:  cfg.RefreshInterval,
@@ -102,6 +107,7 @@ func main() {
 		Collector:       collector,
 		Bili:            client,
 		BiliSessions:    sessions,
+		BiliRefresher:   refresher,
 		AdminToken:      cfg.AdminToken,
 		RefreshInterval: cfg.RefreshInterval,
 		Version:         version,

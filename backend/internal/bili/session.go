@@ -23,6 +23,9 @@ type Session struct {
 	// ExpiresAt is the SESSDATA expiry; filled from the login response and
 	// refined by later nav checks. Zero means unknown.
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	// LastRefreshedAt records the last successful passport cookie rotation
+	// (refresh.go); it throttles re-rotation attempts.
+	LastRefreshedAt time.Time `json:"last_refreshed_at,omitempty"`
 }
 
 // Expired reports whether the session is definitely past its lifetime.

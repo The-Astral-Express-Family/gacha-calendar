@@ -36,10 +36,15 @@ import (
 // Hosts and headers are vars so tests can stub the bilibili side.
 var (
 	apiBase        = "https://api.bilibili.com"
+	webBase        = "https://www.bilibili.com"
 	defaultReferer = "https://www.bilibili.com/"
 	userAgent      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
 		"(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+
+// minRequestGap is the floor every request through the serial chain keeps
+// from its predecessor (a var only so tests can shrink it).
+var minRequestGap = 1200 * time.Millisecond
 
 // transientCodes mean "slow down / refresh the cookie", never "no data".
 var transientCodes = map[int]bool{-352: true, -412: true, -500: true, -503: true, -509: true, -799: true}
@@ -195,20 +200,9 @@ func cleanPath(path string) string {
 
 // rawJSON runs one HTTP request through the serial chain.
 func (c *Client) rawJSON(ctx context.Context, full, cookie, referer string, gap time.Duration) (json.RawMessage, error) {
-	if gap < 1200*time.Millisecond {
-		gap = 1200 * time.Millisecond
+	if !c.reserveSlot(ctx, gap) {
+		return nil, ctx.Err()
 	}
-	c.mu.Lock()
-	wait := time.Until(c.lastRequest.Add(gap))
-	c.mu.Unlock()
-	if wait > 0 {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(wait):
-		}
-	}
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, full, nil)
 	if err != nil {
 		return nil, err
@@ -251,6 +245,98 @@ func (c *Client) rawJSON(ctx context.Context, full, cookie, referer string, gap 
 		return nil, &Error{Code: envelope.Code, Message: envelope.Message, URL: full}
 	}
 	return envelope.Data, nil
+}
+
+// reserveSlot waits out the serial chain's minimum distance from the previous
+// request and takes the slot; false means ctx ended first.
+func (c *Client) reserveSlot(ctx context.Context, gap time.Duration) bool {
+	if gap < minRequestGap {
+		gap = minRequestGap
+	}
+	c.mu.Lock()
+	wait := time.Until(c.lastRequest.Add(gap))
+	c.mu.Unlock()
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+		}
+	}
+	c.mu.Lock()
+	c.lastRequest = time.Now()
+	c.mu.Unlock()
+	return true
+}
+
+// postFormJSON sends one form POST through the serial chain and hands back
+// the envelope data plus the response cookies. No retries and no -101
+// fallback on purpose: the passport rotation endpoints consume one-time
+// tokens, so a failed attempt must surface instead of silently repeating.
+func (c *Client) postFormJSON(ctx context.Context, full, cookie, referer string, form url.Values) (json.RawMessage, []*http.Cookie, error) {
+	if !c.reserveSlot(ctx, minRequestGap) {
+		return nil, nil, ctx.Err()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, full, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Referer", referer)
+	req.Header.Set("Origin", webBase)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, nil, &Error{Code: 0, Message: err.Error(), URL: cleanPath(full)}
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, nil, &Error{Code: 0, Message: err.Error(), URL: cleanPath(full)}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, &Error{Code: resp.StatusCode, Message: fmt.Sprintf("HTTP %d", resp.StatusCode), URL: cleanPath(full)}
+	}
+	var envelope apiEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, nil, &Error{Code: 0, Message: "B 站返回了非 JSON 内容", URL: cleanPath(full)}
+	}
+	if envelope.Code != 0 {
+		return nil, nil, &Error{Code: envelope.Code, Message: envelope.Message, URL: cleanPath(full)}
+	}
+	return envelope.Data, resp.Cookies(), nil
+}
+
+// fetchPage downloads one HTML page through the serial chain; the correspond
+// page answers HTML, not a JSON envelope.
+func (c *Client) fetchPage(ctx context.Context, full, cookie string) ([]byte, error) {
+	if !c.reserveSlot(ctx, minRequestGap) {
+		return nil, ctx.Err()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, full, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Referer", defaultReferer)
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, &Error{Code: 0, Message: err.Error(), URL: cleanPath(full)}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, &Error{Code: resp.StatusCode, Message: fmt.Sprintf("HTTP %d", resp.StatusCode), URL: cleanPath(full)}
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 }
 
 // ensureCookie builds the request cookie: the anonymous buvid (fetched once,

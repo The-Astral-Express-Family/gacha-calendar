@@ -72,7 +72,8 @@ func runBiliLogin(logger *slog.Logger, cfg config.Config) error {
 			fmt.Printf("登录成功：%s (mid %d)，会话已写入 %s\n",
 				session.Uname, session.Mid, sessions.Path())
 			if !session.ExpiresAt.IsZero() {
-				fmt.Printf("SESSDATA 有效期至 %s（到期后重新执行本命令）\n",
+				fmt.Printf("SESSDATA 有效期至 %s（服务会在最后 30 天内自动续期，无需重新扫码；\n"+
+					"仅当登录在别处失效时才需重跑本命令）\n",
 					session.ExpiresAt.Local().Format("2006-01-02 15:04"))
 			}
 			fmt.Println("重启服务后生效（systemctl restart gacha-calendar）。")

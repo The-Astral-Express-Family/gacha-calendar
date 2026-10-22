@@ -102,14 +102,18 @@ func TestSessionStoreRoundtrip(t *testing.T) {
 	}
 }
 
-// stubBili swaps the package hosts for a stub server and restores them.
+// stubBili swaps the package hosts for a stub server and restores them; it
+// also shrinks the serial-chain floor so multi-request flows stay fast.
 func stubBili(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(handler)
-	previousPassport, previousAPI := passportBase, apiBase
-	passportBase, apiBase = server.URL, server.URL
+	previousPassport, previousAPI, previousWeb := passportBase, apiBase, webBase
+	previousGap := minRequestGap
+	passportBase, apiBase, webBase = server.URL, server.URL, server.URL
+	minRequestGap = time.Millisecond
 	t.Cleanup(func() {
-		passportBase, apiBase = previousPassport, previousAPI
+		passportBase, apiBase, webBase = previousPassport, previousAPI, previousWeb
+		minRequestGap = previousGap
 		server.Close()
 	})
 	return server

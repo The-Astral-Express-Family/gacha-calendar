@@ -107,6 +107,35 @@ ssh root@modenc.top 'cd /opt/gacha-calendar && mv gacha-calendar.new gacha-calen
 
 重启后观察：`journalctl -u gacha-calendar -f`、`curl -s localhost:8790/healthz`。
 
+## 迁移服务器
+
+既有凭证全部随文件走，正常情况**无需重新扫码登录**：
+
+```bash
+# 旧机：停服务，打包状态（DB、covers、会话文件都在 DATA_DIR）
+systemctl stop gacha-calendar
+tar -C /var/lib -czf /tmp/gacha-data.tgz gacha-calendar
+scp /tmp/gacha-data.tgz root@<new-host>:/tmp/
+scp /etc/gacha-calendar/gacha-calendar.env root@<new-host>:/tmp/   # ADMIN_TOKEN 等
+
+# 新机：按「首次部署」建好用户/目录/systemd/nginx，然后还原状态
+tar -C /var/lib -xzf /tmp/gacha-data.tgz
+install -m 0600 /tmp/gacha-calendar.env /etc/gacha-calendar/gacha-calendar.env
+chown -R gacha:gacha /var/lib/gacha-calendar
+systemctl restart gacha-calendar
+```
+
+要点：
+
+- `bili-session.json` 在 DATA_DIR 里，随包迁移即带走登录；服务启动即恢复会话，
+  12 小时内的例行探测会自动续期。若迁移时会话已临近过期，可马上
+  `POST /api/admin/bili/login/refresh` 主动换发一轮确认存活。
+- 旧实例**尽快停用**：共用同一会话不会互相踢，但任何一方完成一次 cookie 轮换
+  （confirm 步会吊销旧凭证）后，另一台内存里的旧 cookie 会立刻失效报 -101。
+  迁移时以新机为准，旧机停服即可。
+- 版本历史、校准统计、采集状态都在 SQLite 里，covers/ 里是本地化图片，全部
+  随 DATA_DIR 迁移；env 文件单独拷。
+
 ## 备份
 
 - `gacha-calendar-backup.timer` 每天 04:30（随机延迟 10 分钟内）通过
@@ -137,7 +166,18 @@ ssh root@modenc.top 'cd /opt/gacha-calendar && mv gacha-calendar.new gacha-calen
 只有 generate/poll 两个 passport 接口，**不涉及任何人机验证**。
 
 会话存 `$DATA_DIR/bili-session.json`（默认 `/opt/gacha-calendar/data/`），
-0600、独立于 DB（不进 VACUUM 备份）。SESSDATA 有效期约半年，到期重新扫一次。
+0600、独立于 DB（不进 VACUUM 备份）。SESSDATA 名义有效期约半年，但服务内置
+**自动续期**：启动约 1 分钟后做首次探测，之后每 12 小时 nav 校验一次会话；进入
+最后 30 天窗口时自动走 passport 的 cookie 轮换（凭当前 SESSDATA+bili_jct 换发
+新 cookie，无需扫码、无人机验证），新凭证写回会话文件并即时生效。正常运行情况
+下**永远不需要重新扫码**；只有会话被登出/风控吊销（日志出现 "dead_session" 或
+"session rejected (-101)"）才需重扫。
+
+手动触发一次续期（迁移后确认、或后台续期报错后重试）：
+
+- `POST /api/admin/bili/login/refresh` — 强制跑一轮 nav 校验 + passport 轮换，
+  返回 `outcome`：`rotated`（已换发）/ `not_due`（有效期还长）/ `not_in_window`
+  （B 站尚未开放续期窗口）/ `dead_session`（已失效，只能重扫）等
 
 服务器上执行（推荐，SSH 里直接出二维码）。注意 SESSION_PATH 按 DATA_DIR
 解析，务必在服务的工作目录下运行，或显式指定 `DATA_DIR=/opt/gacha-calendar/data`：

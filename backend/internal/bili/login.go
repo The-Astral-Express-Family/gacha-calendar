@@ -153,8 +153,20 @@ func (c *Client) cookieFromTicket(ctx context.Context, ticketURL string) (string
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 
+	cookie, expiresAt := credentialCookie(resp.Cookies())
+	if cookie == "" {
+		return "", time.Time{}, fmt.Errorf("cross-domain ticket at %s carried no login cookies", cleanTicketURL(ticketURL))
+	}
+	c.log.Info("bilibili login cookies exchanged via crossDomain ticket")
+	return cookie, expiresAt, nil
+}
+
+// credentialCookie flattens response cookies into the stored credential
+// string (loginCookieKeys order) plus the advertised SESSDATA expiry. Shared
+// by the login ticket exchange and the passport cookie refresh.
+func credentialCookie(cookies []*http.Cookie) (string, time.Time) {
 	jar := map[string]*http.Cookie{}
-	for _, cookie := range resp.Cookies() {
+	for _, cookie := range cookies {
 		jar[cookie.Name] = cookie
 	}
 	var cookie string
@@ -172,11 +184,17 @@ func (c *Client) cookieFromTicket(ctx context.Context, ticketURL string) (string
 			expiresAt = entry.Expires.UTC()
 		}
 	}
-	if cookie == "" {
-		return "", time.Time{}, fmt.Errorf("cross-domain ticket at %s carried no login cookies", cleanTicketURL(ticketURL))
+	return cookie, expiresAt
+}
+
+// cookieValue extracts one entry from a stored "a=1; b=2" cookie string.
+func cookieValue(cookie, name string) string {
+	for _, part := range strings.Split(cookie, ";") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(part), name+"="); ok {
+			return value
+		}
 	}
-	c.log.Info("bilibili login cookies exchanged via crossDomain ticket")
-	return cookie, expiresAt, nil
+	return ""
 }
 
 // cleanTicketURL strips the single-use ticket value before it can land in

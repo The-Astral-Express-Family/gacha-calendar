@@ -162,6 +162,9 @@ func (h *handlers) biliLoginStatus(w http.ResponseWriter, r *http.Request) {
 			data["expires_at"] = session.ExpiresAt.Format(time.RFC3339)
 			data["expired"] = session.Expired(time.Now())
 		}
+		if !session.LastRefreshedAt.IsZero() {
+			data["last_refreshed_at"] = session.LastRefreshedAt.Format(time.RFC3339)
+		}
 	}
 	if session != nil && session.Cookie != "" {
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
@@ -181,6 +184,48 @@ func (h *handlers) biliLoginStatus(w http.ResponseWriter, r *http.Request) {
 		data["live"] = live
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": data})
+}
+
+// biliLoginRefresh handles POST /api/admin/bili/login/refresh: one manual
+// renewal attempt (migration day, or after the background loop logged a
+// failure). force bypasses the recent-rotation holdoff.
+func (h *handlers) biliLoginRefresh(w http.ResponseWriter, r *http.Request) {
+	if h.d.BiliRefresher == nil {
+		writeError(w, http.StatusServiceUnavailable, "refresher_disabled", "会话续期器未启用")
+		return
+	}
+	outcome, err := h.d.BiliRefresher.RefreshOnce(r.Context(), true)
+	data := map[string]any{
+		"outcome": outcome,
+		"hint": map[string]string{
+			"no_session":    "没有已保存的会话，先扫码登录",
+			"dead_session":  "会话已失效，只能重新扫码",
+			"nav_failed":    "nav 校验失败，稍后重试",
+			"not_due":       "会话有效期还长，无需续期",
+			"not_in_window": "B 站尚未开放续期窗口（临近过期才接受轮换）",
+			"held_off":      "最近刚续期过",
+			"rotated":       "已用既有凭证换发新 cookie 并生效",
+			"failed":        "续期尝试失败，查看服务端日志",
+		}[outcome],
+	}
+	if err != nil {
+		data["error"] = err.Error()
+	}
+	if session, loadErr := h.d.BiliSessions.Load(); loadErr == nil && session != nil {
+		data["mid"] = session.Mid
+		data["uname"] = session.Uname
+		if !session.ExpiresAt.IsZero() {
+			data["expires_at"] = session.ExpiresAt.Format(time.RFC3339)
+		}
+		if !session.LastRefreshedAt.IsZero() {
+			data["last_refreshed_at"] = session.LastRefreshedAt.Format(time.RFC3339)
+		}
+	}
+	status := http.StatusOK
+	if err != nil {
+		status = http.StatusBadGateway
+	}
+	writeJSON(w, status, map[string]any{"data": data})
 }
 
 // biliLoginDelete handles DELETE /api/admin/bili/login: drop the session file
