@@ -228,9 +228,10 @@ func (c *Collector) Start(ctx context.Context, opts ScheduleOptions, startupDela
 				due := c.dueGames(time.Now().UTC())
 				if len(due) > 0 {
 					c.RequestRefresh(due)
-				} else {
-					c.recordNextRun()
 				}
+				// Record the next expected wake even while busy, so
+				// /api/meta always shows the scheduler's plan.
+				go c.recordNextRun()
 			}
 		}
 	}()
@@ -326,9 +327,6 @@ func (c *Collector) RefreshGames(ctx context.Context, ids []games.GameID) []Game
 		outcome, result := c.collectGame(ctx, id)
 		outcomes = append(outcomes, finished{id: id, out: outcome, result: result})
 		results = append(results, result)
-		if result.Status == "ok" {
-			okCount++
-		}
 		if ctx.Err() != nil {
 			break
 		}
@@ -343,10 +341,27 @@ func (c *Collector) RefreshGames(ctx context.Context, ids []games.GameID) []Game
 	}
 	parse.StaggerVendorPreviews(plans)
 
-	for _, f := range outcomes {
-		if f.out != nil {
-			c.finalizeGame(f.out)
+	for i := range outcomes {
+		f := &outcomes[i]
+		if f.out == nil {
+			continue
 		}
+		c.finalizeGame(f.out)
+		// The status is only known after finalization (it depends on the
+		// persisted plan); reflect it on the cycle result.
+		switch {
+		case f.out.plan == nil:
+			f.result.Status = "error"
+			f.result.Error = firstNonEmptyStr(joinErrors(f.out.errs), "暂无可用的版本信息")
+		case len(f.out.errs) > 0:
+			f.result.Status = "partial"
+			f.result.Error = joinErrors(f.out.errs)
+		default:
+			f.result.Status = "ok"
+			f.result.Error = ""
+			okCount++
+		}
+		results[i] = f.result
 	}
 
 	now := time.Now().UTC()
