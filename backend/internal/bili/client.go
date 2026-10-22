@@ -729,7 +729,17 @@ func parseDynamics(payload dynamicFeed) []Dynamic {
 	return out
 }
 
-// Download fetches a binary asset (cover image) with a bilibili referer.
+// refererForImage keeps the bilibili referer for the bilibili image CDN and
+// sends none for publisher CDNs: hycdn (Hypergryph) 403s a bilibili referer
+// while serving referer-less requests fine.
+func refererForImage(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil && strings.HasSuffix(u.Host, "hdslb.com") {
+		return defaultReferer
+	}
+	return ""
+}
+
+// Download fetches a binary asset (cover image) with a per-CDN referer.
 // It bypasses the API serial chain: the image CDN has its own limits.
 func (c *Client) Download(ctx context.Context, rawURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -737,7 +747,9 @@ func (c *Client) Download(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Referer", defaultReferer)
+	if ref := refererForImage(rawURL); ref != "" {
+		req.Header.Set("Referer", ref)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err

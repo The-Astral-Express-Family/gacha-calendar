@@ -30,6 +30,23 @@ func feedHits(t *testing.T, hits *int) func(*http.Request) bool {
 	}
 }
 
+// TestRefererForImage: the bilibili CDN keeps its referer, publisher CDNs
+// (hycdn) get none — a bilibili referer draws a 403 there.
+func TestRefererForImage(t *testing.T) {
+	cases := []struct{ url, want string }{
+		{"https://i0.hdslb.com/bfs/new_dyn/a.jpg", defaultReferer},
+		{"https://i1.hdslb.com/bfs/archive/b.webp", defaultReferer},
+		{"https://web.hycdn.cn/upload/image/20261014/x.jpg", ""},
+		{"https://sdk-webstatic.mihoyo.com/upload/ann/2026/b.png", ""},
+		{"not a url", ""},
+	}
+	for _, c := range cases {
+		if got := refererForImage(c.url); got != c.want {
+			t.Errorf("refererForImage(%q) = %q, want %q", c.url, got, c.want)
+		}
+	}
+}
+
 // TestDynamicsPaging walks the feed cursor: two screens, then has_more=false.
 func TestDynamicsPaging(t *testing.T) {
 	hits := 0
