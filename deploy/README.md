@@ -115,6 +115,18 @@ ssh root@modenc.top 'cd /opt/gacha-calendar && mv gacha-calendar.new gacha-calen
 
 ## ADMIN_TOKEN
 
-`/api/admin/refresh` 与 `/api/admin/overrides/*` 需要 `Authorization: Bearer <token>`；
+`/api/admin/*`（refresh/bootstrap/overrides）需要 `Authorization: Bearer <token>`；
 生成方式：`openssl rand -hex 24`。dsh 插件端通过
 `globalThis.__GACHA_CALENDAR__ = { baseUrl, token }` 注入。
+
+安全行为（2026-10 起）：
+
+- token 为空时 admin 路由整体不挂载（请求 404，fail-closed），不会退化为无鉴权。
+- token 校验为常数时间比较；同一客户端 IP 在 15 分钟内认证失败 5 次会被封禁
+  15 分钟（期间即使 token 正确也返回 429）。认证成功即清零失败计数。
+  误封（例如自己连续输错）等 15 分钟自动解封，或 `systemctl restart gacha-calendar`。
+- 认证失败会记日志（含来源 IP，经 nginx 的 X-Real-IP 还原真实地址）。
+- token 会进入 dsh 插件的浏览器 JS 上下文，存在被本机其他脚本读取的理论暴露面，
+  建议**定期轮换**：改 `/etc/gacha-calendar/gacha-calendar.env` 中的 `ADMIN_TOKEN`
+  → `systemctl restart gacha-calendar` → 同步更新 dsh 插件注入值。
+

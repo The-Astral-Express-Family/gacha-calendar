@@ -117,7 +117,7 @@ func logRequests(logger *slog.Logger, next http.Handler) http.Handler {
 		// Skip per-request noise for cheap static hits; API and misses count.
 		if strings.HasPrefix(r.URL.Path, "/api") || strings.HasPrefix(r.URL.Path, "/healthz") {
 			logger.Info("http", "method", r.Method, "path", r.URL.Path,
-				"remote", r.RemoteAddr, "duration_ms", time.Since(start).Milliseconds())
+				"remote", api.ClientIP(r), "duration_ms", time.Since(start).Milliseconds())
 		}
 	})
 }

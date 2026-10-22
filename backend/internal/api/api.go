@@ -29,7 +29,7 @@ type Deps struct {
 // Register mounts every route under the given mux (paths already carry /api
 // and /healthz prefixes).
 func Register(mux *http.ServeMux, d Deps) {
-	h := &handlers{d: d}
+	h := &handlers{d: d, failures: newFailureLimiter()}
 
 	mux.HandleFunc("GET /api/games", h.games)
 	mux.HandleFunc("GET /api/predictions", h.predictions)
@@ -49,18 +49,17 @@ func Register(mux *http.ServeMux, d Deps) {
 }
 
 type handlers struct {
-	d Deps
+	d        Deps
+	failures *failureLimiter
 }
 
-func (h *handlers) admin(next func(w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		if auth != "Bearer "+h.d.AdminToken {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "需要 Bearer Token")
-			return
-		}
-		next(w, r)
+// dbError logs the underlying failure server-side and answers with a generic
+// message so driver/SQL internals never reach the client.
+func (h *handlers) dbError(w http.ResponseWriter, r *http.Request, code string, err error) {
+	if h.d.Log != nil {
+		h.d.Log.Error("api error", "code", code, "path", r.URL.Path, "error", err)
 	}
+	writeError(w, http.StatusInternalServerError, code, "服务内部错误，请稍后重试")
 }
 
 // --- read models (UTC RFC3339 everywhere; timezone metadata in /api/meta) ---
@@ -300,12 +299,12 @@ func (h *handlers) predictions(w http.ResponseWriter, r *http.Request) {
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.dbError(w, r, "db_error", err)
 		return
 	}
 	var rows []model.Prediction
 	if err := query.Offset(offset(page, pageSize)).Limit(pageSize).Find(&rows).Error; err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.dbError(w, r, "db_error", err)
 		return
 	}
 
@@ -335,7 +334,7 @@ func (h *handlers) prediction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "not_found", "预测不存在")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.dbError(w, r, "db_error", err)
 		return
 	}
 	names := h.gameNames()
@@ -345,6 +344,10 @@ func (h *handlers) prediction(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- GET /api/posts ---
+
+// likeEscaper neutralizes LIKE wildcards in the q parameter so searches only
+// match literal text (paired with the ESCAPE '\' clause in the query).
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 var postSorts = map[string]string{
 	"publish_time": "publish_time",
@@ -411,8 +414,8 @@ func (h *handlers) posts(w http.ResponseWriter, r *http.Request) {
 		query = query.Where("is_update_notice = ?", val)
 	}
 	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
-		like := "%" + q + "%"
-		query = query.Where("title LIKE ? OR summary LIKE ?", like, like)
+		like := "%" + likeEscaper.Replace(q) + "%"
+		query = query.Where("title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'", like, like)
 	}
 	from, hasFrom, badFrom := parseRFC3339("from", r.URL.Query().Get("from"))
 	to, hasTo, badTo := parseRFC3339("to", r.URL.Query().Get("to"))
@@ -435,12 +438,12 @@ func (h *handlers) posts(w http.ResponseWriter, r *http.Request) {
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.dbError(w, r, "db_error", err)
 		return
 	}
 	var rows []model.Post
 	if err := query.Offset(offset(page, pageSize)).Limit(pageSize).Find(&rows).Error; err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.dbError(w, r, "db_error", err)
 		return
 	}
 	names := h.gameNames()
@@ -459,7 +462,7 @@ func (h *handlers) post(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "not_found", "公告不存在")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.dbError(w, r, "db_error", err)
 		return
 	}
 	names := h.gameNames()
@@ -516,12 +519,12 @@ func (h *handlers) versions(w http.ResponseWriter, r *http.Request) {
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.dbError(w, r, "db_error", err)
 		return
 	}
 	var rows []model.Version
 	if err := query.Offset(offset(page, pageSize)).Limit(pageSize).Find(&rows).Error; err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.dbError(w, r, "db_error", err)
 		return
 	}
 	names := h.gameNames()
@@ -567,7 +570,7 @@ type gameView struct {
 func (h *handlers) games(w http.ResponseWriter, r *http.Request) {
 	var states []model.GameState
 	if err := h.d.DB.Find(&states).Error; err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.dbError(w, r, "db_error", err)
 		return
 	}
 	now := time.Now().UTC()
@@ -775,13 +778,13 @@ func (h *handlers) putOverride(w http.ResponseWriter, r *http.Request) {
 		row.CreatedAt = existing.CreatedAt
 	}
 	if err := h.d.DB.Save(&row).Error; err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		h.dbError(w, r, "db_error", err)
 		return
 	}
 	// Recompute synchronously so the correction is visible immediately,
 	// then let the background refresh re-derive from fresh sources.
 	if err := h.d.Collector.RecomputeGame(gameID, true); err != nil {
-		writeError(w, http.StatusInternalServerError, "recompute_failed", err.Error())
+		h.dbError(w, r, "recompute_failed", err)
 		return
 	}
 	h.d.Collector.RequestRefresh([]games.GameID{gameID})
@@ -794,11 +797,11 @@ func (h *handlers) deleteOverride(w http.ResponseWriter, r *http.Request) {
 	gameID := r.PathValue("game")
 	result := h.d.DB.Delete(&model.Override{}, "game_id = ?", gameID)
 	if result.Error != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", result.Error.Error())
+		h.dbError(w, r, "db_error", result.Error)
 		return
 	}
 	if err := h.d.Collector.RecomputeGame(games.GameID(gameID), false); err != nil {
-		writeError(w, http.StatusInternalServerError, "recompute_failed", err.Error())
+		h.dbError(w, r, "recompute_failed", err)
 		return
 	}
 	h.d.Collector.RequestRefresh([]games.GameID{games.GameID(gameID)})
