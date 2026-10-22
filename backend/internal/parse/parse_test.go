@@ -329,19 +329,20 @@ func TestDateOnlyUpdateAnnouncement(t *testing.T) {
 	assertISO(t, "at", update.At.Format(time.RFC3339), "2026-11-11T06:00:00+08:00")
 }
 
-// Merchandise presale dynamics ("将于10月14日开启预售") must never read as
-// version update dates — one such dynamic rolled WuWa's plan a whole version
-// ahead (3.8 → 3.9 via the expired-candidate roll-forward).
+// Merchandise presale / marketing-event dynamics must never read as version
+// update dates. The recycling-collab one below rolled WuWa's plan a whole
+// version ahead (3.8 → 3.9 via the expired-candidate roll-forward).
 func TestPresaleNotUpdateAnnouncement(t *testing.T) {
 	texts := []string{
 		"「FUN小乖系列坐姿公仔」预售即将开启！将于10月14日10:00开启预售，敬请期待。",
 		"鸣潮丨浮金波纹异形交通卡将于10月14日开启预售，更多详细情报请关注官方店铺。",
 		"系列周边上架通知：10月14日起陆续上架，先到先得。",
+		"闲置“频率”回收计划，即将开启！鸣潮×@爱回收返航新生 联动活动即将于2026年10月16日正式开启，活动预约已上线。",
 	}
 	for _, text := range texts {
 		if update := ExtractNextUpdateAnnouncement(text,
 			utcMoment(t, "2026-10-10T04:00:00Z"), game(games.WuWa)); update != nil {
-			t.Fatalf("presale text parsed as update %v: %q", update.At, text)
+			t.Fatalf("marketing text parsed as update %v: %q", update.At, text)
 		}
 	}
 }
