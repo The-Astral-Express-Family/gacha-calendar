@@ -639,9 +639,9 @@ type dynamicFeed struct {
 const dynamicsPageWindow = 21 * 24 * time.Hour
 
 // dynamicsMaxPages bounds the cursor walk for accounts that post many
-// dynamics a day (the official Genshin account pushes the teaser off the
-// first screen within days).
-const dynamicsMaxPages = 6
+// dynamics a day (the official Genshin account pushes a week-old teaser
+// beyond the sixth screen).
+const dynamicsMaxPages = 10
 
 // Dynamics lists recent official dynamics, walking the feed cursor a few
 // screens deep. Optional because some accounts answer -352 — the caller
