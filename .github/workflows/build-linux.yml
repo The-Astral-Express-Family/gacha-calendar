@@ -1,0 +1,70 @@
+# 打包 Linux amd64 单二进制并发布到滚动 Release(tag: build)。
+# 服务器直接拉固定 URL:
+#   https://github.com/The-Astral-Express-Family/gacha-calendar/releases/latest/download/gacha-calendar-linux-amd64
+name: build-linux
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-linux
+  cancel-in-progress: true
+
+env:
+  BINARY: gacha-calendar-linux-amd64
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: 构建前端并嵌入
+        run: |
+          pnpm --dir frontend install --frozen-lockfile
+          pnpm --dir frontend build
+          rm -rf backend/web/assets/dist
+          cp -r frontend/dist backend/web/assets/dist
+
+      - name: 构建 Linux 二进制
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          cd backend
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_SHA:0:12}" \
+            -o "$BINARY" ./cmd/gacha-calendar
+          sha256sum "$BINARY" > "$BINARY.sha256"
+
+      - name: 发布到滚动 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="CI 自动构建
+          - commit: ${GITHUB_SHA}
+          - 时间: $(date -u '+%Y-%m-%d %H:%M UTC')"
+          if ! gh release view build -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create build -R "$GITHUB_REPOSITORY" \
+              --title "latest build" --notes "$notes" --latest
+          else
+            gh release edit build -R "$GITHUB_REPOSITORY" --notes "$notes" --latest
+          fi
+          gh release upload build "backend/$BINARY" "backend/$BINARY.sha256" --clobber

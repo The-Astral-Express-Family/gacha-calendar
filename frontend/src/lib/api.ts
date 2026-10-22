@@ -122,7 +122,9 @@ async function request<T>(path: string): Promise<T> {
     try {
       const body = await response.json()
       if (body?.error?.message) message = body.error.message
-    } catch { /* keep HTTP status text */ }
+    } catch {
+      /* keep HTTP status text */
+    }
     throw new Error(message)
   }
   return response.json() as Promise<T>

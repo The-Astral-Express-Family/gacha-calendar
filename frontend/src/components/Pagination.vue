@@ -32,9 +32,7 @@ function jump(target: number) {
 
 <template>
   <div class="pagination">
-    <span class="faint">
-      共 {{ pagination.total }} 条 · 第 {{ pagination.page }}/{{ pagination.total_pages }} 页
-    </span>
+    <span class="faint"> 共 {{ pagination.total }} 条 · 第 {{ pagination.page }}/{{ pagination.total_pages }} 页 </span>
     <div class="pages">
       <button :disabled="pagination.page <= 1" @click="jump(pagination.page - 1)">‹</button>
       <template v-for="(page, index) in pages" :key="`${page}-${index}`">
@@ -55,8 +53,15 @@ function jump(target: number) {
   flex-wrap: wrap;
   margin-top: 0.9rem;
 }
-.pages { display: flex; gap: 0.3rem; align-items: center; }
-.pages button { min-width: 2rem; padding: 0.28rem 0.5rem; }
+.pages {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+.pages button {
+  min-width: 2rem;
+  padding: 0.28rem 0.5rem;
+}
 .pages button.active {
   background: var(--accent-soft);
   border-color: var(--accent);

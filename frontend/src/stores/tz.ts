@@ -15,7 +15,9 @@ function initial(): TzValue {
     try {
       new Intl.DateTimeFormat('zh-CN', { timeZone: param })
       return param
-    } catch { /* invalid zone in link, fall through */ }
+    } catch {
+      /* invalid zone in link, fall through */
+    }
   }
   const stored = window.localStorage.getItem(STORAGE_KEY)
   if (stored === 'local' || stored === 'shanghai' || stored === 'utc') return stored
@@ -23,7 +25,9 @@ function initial(): TzValue {
     try {
       new Intl.DateTimeFormat('zh-CN', { timeZone: stored })
       return stored
-    } catch { /* ignore bad stored value */ }
+    } catch {
+      /* ignore bad stored value */
+    }
   }
   return 'local'
 }

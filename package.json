@@ -1,0 +1,19 @@
+{
+  "name": "gacha-calendar-dev",
+  "private": true,
+  "description": "根目录开发工具链:husky + lint-staged + commitlint + prettier(前端格式化);Go 用 gofmt",
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.8.1",
+    "@commitlint/config-conventional": "^19.8.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2",
+    "prettier": "^3.5.3"
+  },
+  "lint-staged": {
+    "backend/**/*.go": "gofmt -w",
+    "frontend/**/*.{vue,ts,css,html,json}": "prettier --write --ignore-unknown"
+  }
+}

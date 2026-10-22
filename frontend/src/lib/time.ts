@@ -58,34 +58,39 @@ function formatter(zone: string, options: Intl.DateTimeFormatOptions): Intl.Date
 /** "2026-11-11 06:00" in the given zone. */
 export function formatDateTime(zone: string, unixSeconds: number): string {
   return formatter(zone, {
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
   }).format(new Date(unixSeconds * 1000))
 }
 
 /** "11-11 周三 06:00" in the given zone. */
 export function formatShort(zone: string, unixSeconds: number): string {
   return formatter(zone, {
-    month: '2-digit', day: '2-digit', weekday: 'short',
-    hour: '2-digit', minute: '2-digit', hour12: false,
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
   }).format(new Date(unixSeconds * 1000))
 }
 
 /** "2026-11-11" in the given zone. */
 export function formatDate(zone: string, unixSeconds: number): string {
-  return formatter(zone, { year: 'numeric', month: '2-digit', day: '2-digit' })
-    .format(new Date(unixSeconds * 1000))
+  return formatter(zone, { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(unixSeconds * 1000))
 }
 
 /** "11-11" in the given zone. */
 export function formatDateShort(zone: string, unixSeconds: number): string {
-  return formatter(zone, { month: '2-digit', day: '2-digit' })
-    .format(new Date(unixSeconds * 1000))
+  return formatter(zone, { month: '2-digit', day: '2-digit' }).format(new Date(unixSeconds * 1000))
 }
 
 export function formatTime(zone: string, unixSeconds: number): string {
-  return formatter(zone, { hour: '2-digit', minute: '2-digit', hour12: false })
-    .format(new Date(unixSeconds * 1000))
+  return formatter(zone, { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(unixSeconds * 1000))
 }
 
 export function formatWeekday(zone: string, unixSeconds: number): string {
@@ -98,9 +103,15 @@ export function formatWeekday(zone: string, unixSeconds: number): string {
  */
 export function dayKey(zone: string, unixSeconds: number): string {
   return formatter(zone, {
-    year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(new Date(unixSeconds * 1000)).replaceAll('/', '-')
-    .replaceAll('年', '-').replaceAll('月', '-').replaceAll('日', '')
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+    .format(new Date(unixSeconds * 1000))
+    .replaceAll('/', '-')
+    .replaceAll('年', '-')
+    .replaceAll('月', '-')
+    .replaceAll('日', '')
 }
 
 /** Inverse of dayKey: unix seconds of wall-clock midnight in the zone. */
@@ -120,14 +131,16 @@ export function zoneOffsetSeconds(zone: string, at: Date = new Date()): number {
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: zone,
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
     }).formatToParts(at)
     const get = (type: string) => Number(parts.find((part) => part.type === type)?.value)
-    const asUTC = Date.UTC(
-      get('year'), get('month') - 1, get('day'),
-      get('hour') % 24, get('minute'), get('second'),
-    )
+    const asUTC = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second'))
     return Math.round((asUTC - at.getTime()) / 1000)
   } catch {
     return 0

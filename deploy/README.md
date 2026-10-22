@@ -44,7 +44,12 @@
 
 ## 构建
 
-在开发机仓库根目录：
+推送到 `main` 后 CI（`.github/workflows/build-linux.yml`）自动完成完整构建
+（前端 → embed → Linux amd64 二进制）并覆盖发布到滚动 Release（tag `build`，
+即 releases/latest）。也可在 Actions 页面对任意历史 commit 手动触发
+`workflow_dispatch` 来重发布旧版本（用于回滚）。
+
+本地构建仅在 CI 不可用时需要：
 
 ```bash
 ./build.sh                                    # 本地完整构建
@@ -79,6 +84,21 @@ nginx -t && systemctl reload nginx
 ```
 
 ## 升级
+
+从 CI Release 拉取（固定 URL 始终指向最新构建，仓库公开无需 token）：
+
+```bash
+ssh root@modenc.top
+cd /tmp
+base=https://github.com/The-Astral-Express-Family/gacha-calendar/releases/latest/download
+curl -fLO "$base/gacha-calendar-linux-amd64"
+curl -fLO "$base/gacha-calendar-linux-amd64.sha256"
+sha256sum -c gacha-calendar-linux-amd64.sha256
+install -m 0755 gacha-calendar-linux-amd64 /opt/gacha-calendar/gacha-calendar
+systemctl restart gacha-calendar
+```
+
+无 CI 时（或热修复未推送）仍可本地 scp：
 
 ```bash
 scp backend/gacha-calendar-linux-amd64 root@modenc.top:/opt/gacha-calendar/gacha-calendar.new

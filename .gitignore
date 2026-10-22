@@ -1,6 +1,7 @@
 # Go
 backend/gacha-calendar
 backend/gacha-calendar.exe
+backend/gacha-calendar-linux-amd64*
 *.test
 *.out
 coverage.*
