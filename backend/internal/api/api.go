@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
 
+	"github.com/The-Astral-Express-Family/gacha-calendar/backend/internal/bili"
 	"github.com/The-Astral-Express-Family/gacha-calendar/backend/internal/collect"
 	"github.com/The-Astral-Express-Family/gacha-calendar/backend/internal/games"
 	"github.com/The-Astral-Express-Family/gacha-calendar/backend/internal/model"
@@ -18,8 +20,12 @@ import (
 
 // Deps bundles what the handlers need.
 type Deps struct {
-	DB              *gorm.DB
-	Collector       *collect.Collector
+	DB        *gorm.DB
+	Collector *collect.Collector
+	// Bili is the shared Bilibili client; its optional login session is what
+	// the admin QR-login endpoints install.
+	Bili            *bili.Client
+	BiliSessions    *bili.SessionStore
 	AdminToken      string
 	RefreshInterval time.Duration
 	Version         string
@@ -45,12 +51,22 @@ func Register(mux *http.ServeMux, d Deps) {
 		mux.HandleFunc("POST /api/admin/bootstrap", h.admin(h.bootstrap))
 		mux.HandleFunc("PUT /api/admin/overrides/{game}", h.admin(h.putOverride))
 		mux.HandleFunc("DELETE /api/admin/overrides/{game}", h.admin(h.deleteOverride))
+		mux.HandleFunc("POST /api/admin/bili/login", h.admin(h.biliLoginQR))
+		mux.HandleFunc("GET /api/admin/bili/login", h.admin(h.biliLoginStatus))
+		mux.HandleFunc("GET /api/admin/bili/login/qr.png", h.admin(h.biliLoginQRPNG))
+		mux.HandleFunc("POST /api/admin/bili/login/poll", h.admin(h.biliLoginPoll))
+		mux.HandleFunc("DELETE /api/admin/bili/login", h.admin(h.biliLoginDelete))
 	}
 }
 
 type handlers struct {
 	d        Deps
 	failures *failureLimiter
+
+	// single-slot state for the admin QR login flow
+	qrMu         sync.Mutex
+	qrKey, qrURL string
+	qrAt         time.Time
 }
 
 // dbError logs the underlying failure server-side and answers with a generic

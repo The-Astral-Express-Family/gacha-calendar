@@ -26,6 +26,12 @@ var version = "dev"
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Error("config", "error", err)
+		os.Exit(1)
+	}
+
 	// `gacha-calendar backup <target.db>` writes a consistent snapshot via
 	// SQLite's VACUUM INTO (administrative engine command, not data SQL).
 	// Used by the systemd backup timer; the server needs no sqlite3 CLI.
@@ -41,10 +47,14 @@ func main() {
 		return
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		logger.Error("config", "error", err)
-		os.Exit(1)
+	// `gacha-calendar bili-login` runs the interactive QR login and writes
+	// the session file; it shares the env config with the service.
+	if len(os.Args) >= 2 && os.Args[1] == "bili-login" {
+		if err := runBiliLogin(logger, cfg); err != nil {
+			logger.Error("bili-login", "error", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	db, err := store.Open(cfg.DBPath, logger)
@@ -54,6 +64,19 @@ func main() {
 	}
 
 	client := bili.New(logger)
+	sessions := bili.NewSessionStore(cfg.SessionPath)
+	if session, err := sessions.Load(); err != nil {
+		logger.Warn("bilibili session file unreadable, continuing anonymously", "error", err.Error())
+	} else if session != nil {
+		if session.Expired(time.Now()) {
+			logger.Warn("bilibili session expired, continuing anonymously",
+				"expired_at", session.ExpiresAt.Format(time.RFC3339),
+				"hint", "re-run `gacha-calendar bili-login` on the server")
+		} else {
+			client.SetSessionCookie(session.Cookie)
+			logger.Info("bilibili session restored", "mid", session.Mid, "uname", session.Uname)
+		}
+	}
 	downloader := covers.New(cfg.CoversDir, client, logger)
 	collector := collect.New(db, client, downloader, logger)
 
@@ -77,6 +100,8 @@ func main() {
 	handler := server.New(api.Deps{
 		DB:              db,
 		Collector:       collector,
+		Bili:            client,
+		BiliSessions:    sessions,
 		AdminToken:      cfg.AdminToken,
 		RefreshInterval: cfg.RefreshInterval,
 		Version:         version,

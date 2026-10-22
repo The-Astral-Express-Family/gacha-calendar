@@ -8,6 +8,10 @@
 //     SPI endpoint, refreshable when it goes stale
 //   - x/space/wbi/arc/search is not used (-352 even with a cookie; WBI
 //     signing is not worth the fragility)
+//   - an optional logged-in session (QR login, see login.go) is prepended to
+//     the anonymous cookie; it lifts -352 on the dynamics feed and the login
+//     wall on personal accounts' dynamics. A rejected session (-101) falls
+//     back to anonymous for the rest of the process lifetime
 //
 // Every failure surfaces as *Error; callers keep the previous state instead
 // of writing guessed values.
@@ -29,7 +33,8 @@ import (
 	"time"
 )
 
-const (
+// Hosts and headers are vars so tests can stub the bilibili side.
+var (
 	apiBase        = "https://api.bilibili.com"
 	defaultReferer = "https://www.bilibili.com/"
 	userAgent      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -72,6 +77,28 @@ type Client struct {
 	lastRequest   time.Time
 	cookie        string
 	cookieFetched bool
+	session       string // logged-in cookie from QR login, "" when anonymous
+}
+
+// SetSessionCookie installs a logged-in session cookie (see login.go).
+func (c *Client) SetSessionCookie(cookie string) {
+	c.mu.Lock()
+	c.session = cookie
+	c.mu.Unlock()
+}
+
+// ClearSessionCookie drops the in-process session (logout or -101 rejection).
+func (c *Client) ClearSessionCookie() {
+	c.mu.Lock()
+	c.session = ""
+	c.mu.Unlock()
+}
+
+// HasSessionCookie reports whether requests currently carry a login.
+func (c *Client) HasSessionCookie() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.session != ""
 }
 
 func New(logger *slog.Logger) *Client {
@@ -87,9 +114,17 @@ type apiEnvelope struct {
 	Data    json.RawMessage `json:"data"`
 }
 
-// get performs one logical GET with retries, respecting the serial gap.
-// useCookie=false serves the cookie bootstrap request itself.
-func (c *Client) get(ctx context.Context, path string, gap time.Duration, retries int, referer string, useCookie bool) (json.RawMessage, error) {
+// cookieMode picks how fetch() resolves the Cookie header per attempt.
+type cookieMode int
+
+const (
+	cookieAuto  cookieMode = iota // login session (if any) + anonymous buvid
+	cookieNone                    // passport endpoints and the live domain
+	cookieFixed                   // exactly the caller-supplied cookie (nav)
+)
+
+// fetch performs one logical GET with retries, respecting the serial gap.
+func (c *Client) fetch(ctx context.Context, path string, mode cookieMode, fixed string, gap time.Duration, retries int, referer string) (json.RawMessage, error) {
 	full := path
 	if !strings.HasPrefix(path, "http") {
 		full = apiBase + path
@@ -97,16 +132,26 @@ func (c *Client) get(ctx context.Context, path string, gap time.Duration, retrie
 	var lastErr error
 	for attempt := 0; ; attempt++ {
 		cookie := ""
-		if useCookie {
-			if fetched, err := c.ensureCookie(ctx); err == nil {
-				cookie = fetched
-			}
+		switch mode {
+		case cookieAuto:
+			cookie = c.ensureCookie(ctx)
+		case cookieFixed:
+			cookie = fixed
 		}
 		data, err := c.rawJSON(ctx, full, cookie, referer, gap)
 		if err == nil {
 			return data, nil
 		}
 		lastErr = err
+		// -101 means the endpoint wanted a login and ours (if any) was
+		// rejected: drop the session and retry this attempt anonymously.
+		var rejected *Error
+		if mode == cookieAuto && errors.As(err, &rejected) && rejected.Code == -101 && c.HasSessionCookie() {
+			c.ClearSessionCookie()
+			c.log.Warn("bilibili session rejected (-101), continuing anonymously", "path", cleanPath(path))
+			attempt--
+			continue
+		}
 		if !transient(err) || attempt >= retries {
 			_ = lastErr
 			return nil, err
@@ -124,6 +169,21 @@ func (c *Client) get(ctx context.Context, path string, gap time.Duration, retrie
 		case <-time.After(backoff[min(attempt, len(backoff)-1)]):
 		}
 	}
+}
+
+// get is the normal mode: session + anonymous buvid.
+func (c *Client) get(ctx context.Context, path string, gap time.Duration, retries int, referer string) (json.RawMessage, error) {
+	return c.fetch(ctx, path, cookieAuto, "", gap, retries, referer)
+}
+
+// getAnon sends no cookie at all.
+func (c *Client) getAnon(ctx context.Context, path string, gap time.Duration, retries int, referer string) (json.RawMessage, error) {
+	return c.fetch(ctx, path, cookieNone, "", gap, retries, referer)
+}
+
+// getWith sends exactly the given cookie.
+func (c *Client) getWith(ctx context.Context, path, cookie string, gap time.Duration, retries int, referer string) (json.RawMessage, error) {
+	return c.fetch(ctx, path, cookieFixed, cookie, gap, retries, referer)
 }
 
 func cleanPath(path string) string {
@@ -193,37 +253,59 @@ func (c *Client) rawJSON(ctx context.Context, full, cookie, referer string, gap 
 	return envelope.Data, nil
 }
 
-// ensureCookie fetches the anonymous buvid cookie once, best-effort.
-func (c *Client) ensureCookie(ctx context.Context) (string, error) {
+// ensureCookie builds the request cookie: the anonymous buvid (fetched once,
+// best-effort) with a logged-in session prepended when one is installed. It
+// never returns an empty string while a session exists — a failed buvid
+// bootstrap must not drop the login.
+func (c *Client) ensureCookie(ctx context.Context) string {
 	c.mu.Lock()
 	if c.cookieFetched {
-		cookie := c.cookie
+		base := c.cookie
+		session := c.session
 		c.mu.Unlock()
-		return cookie, nil
+		return mergeCookie(session, base)
 	}
 	c.mu.Unlock()
 
-	data, err := c.get(ctx, "/x/frontend/finger/spi", 0, 1, defaultReferer, false)
+	data, err := c.getAnon(ctx, "/x/frontend/finger/spi", 0, 1, defaultReferer)
 	if err != nil {
 		c.log.Warn("anonymous buvid cookie unavailable", "error", err.Error())
-		return "", err
+	} else {
+		var spi struct {
+			B3 string `json:"b_3"`
+			B4 string `json:"b_4"`
+		}
+		if err := json.Unmarshal(data, &spi); err != nil || spi.B3 == "" {
+			c.log.Warn("spi response unusable")
+		} else {
+			cookie := "buvid3=" + spi.B3
+			if spi.B4 != "" {
+				cookie += "; buvid4=" + spi.B4
+			}
+			c.mu.Lock()
+			c.cookie = cookie
+			c.cookieFetched = true
+			c.mu.Unlock()
+		}
 	}
-	var spi struct {
-		B3 string `json:"b_3"`
-		B4 string `json:"b_4"`
-	}
-	if err := json.Unmarshal(data, &spi); err != nil || spi.B3 == "" {
-		return "", fmt.Errorf("spi response unusable")
-	}
-	cookie := "buvid3=" + spi.B3
-	if spi.B4 != "" {
-		cookie += "; buvid4=" + spi.B4
-	}
+
 	c.mu.Lock()
-	c.cookie = cookie
-	c.cookieFetched = true
+	base := c.cookie
+	session := c.session
 	c.mu.Unlock()
-	return cookie, nil
+	return mergeCookie(session, base)
+}
+
+// mergeCookie joins the session and anonymous cookie parts, skipping empties.
+func mergeCookie(session, base string) string {
+	switch {
+	case session == "":
+		return base
+	case base == "":
+		return session
+	default:
+		return session + "; " + base
+	}
 }
 
 // FlexString unmarshals a JSON value that may arrive as either a string or
@@ -291,7 +373,7 @@ func (c *Client) ArticleListPage(ctx context.Context, mid string, page int) ([]A
 		"/x/space/article?mid="+url.QueryEscape(mid)+
 			"&pn="+strconv.Itoa(page)+"&ps=30&sort=publish_time",
 		1200*time.Millisecond, 2,
-		"https://space.bilibili.com/"+url.QueryEscape(mid)+"/article", true)
+		"https://space.bilibili.com/"+url.QueryEscape(mid)+"/article")
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +398,7 @@ type ArticleView struct {
 
 func (c *Client) ArticleView(ctx context.Context, id string) (ArticleView, error) {
 	data, err := c.get(ctx, "/x/article/view?id="+url.QueryEscape(id),
-		2800*time.Millisecond, 4, ArticleURL(id), true)
+		2800*time.Millisecond, 4, ArticleURL(id))
 	if err != nil {
 		return ArticleView{}, err
 	}
@@ -363,7 +445,7 @@ func (c *Client) FeatureVideos(ctx context.Context, mid, keyword string) ([]Arch
 		"/x/series/recArchivesByKeywords?mid="+url.QueryEscape(mid)+
 			"&keywords="+url.QueryEscape(keyword)+"&ps=20",
 		2500*time.Millisecond, 3,
-		"https://space.bilibili.com/"+url.QueryEscape(mid)+"/upload/video", true)
+		"https://space.bilibili.com/"+url.QueryEscape(mid)+"/upload/video")
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +479,7 @@ func (c *Client) SearchVideos(ctx context.Context, keyword string) ([]Archive, e
 	data, err := c.get(ctx,
 		"/x/web-interface/search/type?search_type=video&order=pubdate&page=1&page_size=50&keyword="+
 			url.QueryEscape(keyword),
-		1800*time.Millisecond, 1, "https://search.bilibili.com/", true)
+		1800*time.Millisecond, 1, "https://search.bilibili.com/")
 	if err != nil {
 		return nil, err
 	}
@@ -470,7 +552,7 @@ func (c *Client) Dynamics(ctx context.Context, mid string) ([]Dynamic, error) {
 		"/x/polymer/web-dynamic/v1/feed/space?host_mid="+url.QueryEscape(mid)+
 			"&offset=&timezone_offset=-480",
 		2500*time.Millisecond, 1,
-		"https://space.bilibili.com/"+url.QueryEscape(mid)+"/dynamic", true)
+		"https://space.bilibili.com/"+url.QueryEscape(mid)+"/dynamic")
 	if err != nil {
 		return nil, err
 	}
@@ -546,10 +628,10 @@ type LiveRoom struct {
 // has its own, weaker risk control than api.bilibili.com and keeps answering
 // from datacenter IPs while the dynamics feed is blocked.
 func (c *Client) LiveRoomInfo(ctx context.Context, roomID string) (LiveRoom, error) {
-	data, err := c.get(ctx,
+	data, err := c.getAnon(ctx,
 		"https://api.live.bilibili.com/room/v1/Room/get_info?room_id="+url.QueryEscape(roomID),
 		1500*time.Millisecond, 2,
-		"https://live.bilibili.com/"+url.QueryEscape(roomID), false)
+		"https://live.bilibili.com/"+url.QueryEscape(roomID))
 	if err != nil {
 		return LiveRoom{}, err
 	}

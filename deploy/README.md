@@ -130,3 +130,33 @@ ssh root@modenc.top 'cd /opt/gacha-calendar && mv gacha-calendar.new gacha-calen
   建议**定期轮换**：改 `/etc/gacha-calendar/gacha-calendar.env` 中的 `ADMIN_TOKEN`
   → `systemctl restart gacha-calendar` → 同步更新 dsh 插件注入值。
 
+## B 站扫码登录（采集会话）
+
+登录后的 SESSDATA 拼进采集请求，可绕开动态流接口对机房 IP 的 -352 风控，
+也能看到个人认证号（星铁/鸣潮）未登录时被登录墙挡住的动态。扫码流程
+只有 generate/poll 两个 passport 接口，**不涉及任何人机验证**。
+
+会话存 `$DATA_DIR/bili-session.json`（默认 `/opt/gacha-calendar/data/`），
+0600、独立于 DB（不进 VACUUM 备份）。SESSDATA 有效期约半年，到期重新扫一次。
+
+服务器上执行（推荐，SSH 里直接出二维码）。注意 SESSION_PATH 按 DATA_DIR
+解析，务必在服务的工作目录下运行，或显式指定 `DATA_DIR=/opt/gacha-calendar/data`：
+
+```sh
+cd /opt/gacha-calendar
+sudo -u gacha ./gacha-calendar bili-login   # 终端出二维码，手机 B 站 App 扫码确认
+sudo systemctl restart gacha-calendar       # 服务启动时会加载会话并打日志
+```
+
+或走 admin API（SSH 端口转发后浏览器/脚本操作）：
+
+- `POST /api/admin/bili/login` — 生成二维码（返回 qrcode_key）
+- `GET  /api/admin/bili/login/qr.png` — 二维码图片
+- `POST /api/admin/bili/login/poll` — 轮询状态（waiting/scanned/success/expired），
+  success 时会话即刻生效，无需重启
+- `GET  /api/admin/bili/login` — 会话状态（含 nav 实时校验 logged_in）
+- `DELETE /api/admin/bili/login` — 登出并删除会话文件
+
+注意：cookie 内容绝不经 API 返回；若账号在别处被登出或风控失效（接口报 -101），
+采集会自动降级匿名继续，日志出现 "session rejected (-101)"，此时重新扫码。
+

@@ -4,6 +4,7 @@ go 1.24
 
 require (
 	github.com/glebarez/sqlite v1.11.0
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	gorm.io/gorm v1.31.2
 )
 

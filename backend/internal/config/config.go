@@ -16,6 +16,8 @@ type Config struct {
 	DBPath string
 	// Directory where collected cover images are written. Default ./data/covers.
 	CoversDir string
+	// Bilibili QR-login session file. Default ./data/bili-session.json.
+	SessionPath string
 	// BaseInterval: quiet-period per-game poll distance. Default 3h.
 	RefreshInterval time.Duration
 	// WatchInterval: poll distance inside an event watch window (off-peak
@@ -96,6 +98,7 @@ func Load() (Config, error) {
 		Addr:             env("ADDR", "127.0.0.1:8787"),
 		DBPath:           env("DB_PATH", dataDir+"/gacha.db"),
 		CoversDir:        env("COVERS_DIR", dataDir+"/covers"),
+		SessionPath:      env("SESSION_PATH", dataDir+"/bili-session.json"),
 		RefreshInterval:  refreshInterval,
 		WatchInterval:    watchInterval,
 		PrimeInterval:    primeInterval,
