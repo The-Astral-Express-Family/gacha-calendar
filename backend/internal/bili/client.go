@@ -535,6 +535,103 @@ func (c *Client) Download(ctx context.Context, rawURL string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 12<<20))
 }
 
+// LiveRoom is the slice of room/v1/Room/get_info the collector needs.
+type LiveRoom struct {
+	RoomID     string
+	Title      string
+	LiveStatus int // 0 idle, 1 streaming
+}
+
+// LiveRoomInfo reads the public room card from the live domain. This domain
+// has its own, weaker risk control than api.bilibili.com and keeps answering
+// from datacenter IPs while the dynamics feed is blocked.
+func (c *Client) LiveRoomInfo(ctx context.Context, roomID string) (LiveRoom, error) {
+	data, err := c.get(ctx,
+		"https://api.live.bilibili.com/room/v1/Room/get_info?room_id="+url.QueryEscape(roomID),
+		1500*time.Millisecond, 2,
+		"https://live.bilibili.com/"+url.QueryEscape(roomID), false)
+	if err != nil {
+		return LiveRoom{}, err
+	}
+	var payload struct {
+		RoomID     int    `json:"room_id"`
+		Title      string `json:"title"`
+		LiveStatus int    `json:"live_status"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return LiveRoom{}, err
+	}
+	return LiveRoom{
+		RoomID:     strconv.Itoa(payload.RoomID),
+		Title:      StripHTML(payload.Title),
+		LiveStatus: payload.LiveStatus,
+	}, nil
+}
+
+// liveAnnouncementPair matches the sys_msg embedded in a live room's HTML:
+// "uid":…,"ctime":"2026-10-21 12:00:30","content":"《原神》7.2版本前瞻特别
+// 节目将于10月23日晚20:00开启！"
+var liveAnnouncementPair = regexp.MustCompile(
+	`"ctime":"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})","content":"((?:[^"\\]|\\.)+)"`)
+
+func decodeJSONString(raw string) string {
+	var out string
+	if err := json.Unmarshal([]byte(`"`+raw+`"`), &out); err != nil {
+		return raw
+	}
+	return out
+}
+
+// LiveRoomAnnouncement fetches the room's web page and extracts the newest
+// official announcement text with its publication time. The page embeds the
+// reservation message ("将于10月23日晚20:00开启") as plain HTML-escaped JSON,
+// reachable without any API cookie — the teaser source that survives
+// dynamics-feed risk control.
+func (c *Client) LiveRoomAnnouncement(ctx context.Context, roomID string) (text string, published time.Time, err error) {
+	pageURL := "https://live.bilibili.com/" + roomID
+	req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	if reqErr != nil {
+		return "", time.Time{}, reqErr
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Referer", "https://live.bilibili.com/")
+	resp, doErr := c.http.Do(req)
+	if doErr != nil {
+		return "", time.Time{}, doErr
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", time.Time{}, fmt.Errorf("live room %s: HTTP %d", roomID, resp.StatusCode)
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if readErr != nil {
+		return "", time.Time{}, readErr
+	}
+
+	var bestText string
+	var bestAt time.Time
+	for _, m := range liveAnnouncementPair.FindAllStringSubmatch(string(body), -1) {
+		content := strings.TrimSpace(decodeJSONString(m[2]))
+		if !strings.ContainsAny(content, "0123456789") {
+			continue
+		}
+		at, parseErr := time.ParseInLocation("2006-01-02 15:04:05", m[1], liveCST)
+		if parseErr != nil {
+			at = time.Time{}
+		}
+		if bestText == "" || at.After(bestAt) {
+			bestText, bestAt = content, at
+		}
+	}
+	if bestText == "" {
+		return "", time.Time{}, nil
+	}
+	return bestText, bestAt.In(liveCST), nil
+}
+
+// liveCST is the fixed national-server zone used by the live-room page times.
+var liveCST = time.FixedZone("UTC+8", 8*3600)
+
 // ArticleURL maps a column/opus id to its public page.
 func ArticleURL(id string) string {
 	if strings.HasPrefix(strings.ToLower(id), "cv") {

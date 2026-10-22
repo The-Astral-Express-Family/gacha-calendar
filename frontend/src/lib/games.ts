@@ -57,6 +57,7 @@ export const SOURCE_TYPE_LABELS: Record<string, string> = {
   article: '专栏公告',
   dynamic: '官方动态',
   video: '官方视频',
+  live: '直播间公告',
 }
 
 export function sourceTypeLabel(value: string): string {

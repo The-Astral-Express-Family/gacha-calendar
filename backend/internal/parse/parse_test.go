@@ -442,3 +442,23 @@ func assertISO(t *testing.T, what, got, want string) {
 		t.Errorf("%s = %q, want %q", what, got, want)
 	}
 }
+
+func TestLiveRoomAnnouncementParse(t *testing.T) {
+	// The live-room embedded system message, verbatim from
+	// live.bilibili.com/21987615 on 2026-10-22: single "晚" before the hour.
+	text := "《原神》7.2版本前瞻特别节目将于10月23日晚20:00开启！"
+	pub := utcMoment(t, "2026-10-21T04:00:30Z")
+	at, ok := ExtractPreviewAt(text, pub, game(games.Genshin))
+	if !ok {
+		t.Fatal("no preview parsed from live-room announcement")
+	}
+	assertISO(t, "preview", at.Format(time.RFC3339), "2026-10-23T20:00:00+08:00")
+
+	published := utcMoment(t, "2026-09-21T04:00:00Z")
+	current := ParseArticle("7.1版本更新说明",
+		"〓更新时间〓\n2026/09/23 06:00", published, game(games.Genshin))
+	plan := PlanNext(game(games.Genshin), &current, utcMoment(t, "2026-10-22T04:00:00Z"), nil,
+		[]Announcement{{Text: text, Pubdate: utcMoment(t, "2026-10-21T04:00:30Z")}}, nil)
+	assertISO(t, "previewStart", plan.PreviewStart.Format(time.RFC3339), "2026-10-23T20:00:00+08:00")
+	assertISO(t, "previewConfidence", plan.PreviewConfidence, "official")
+}

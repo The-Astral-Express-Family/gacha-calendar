@@ -68,6 +68,11 @@ type Game struct {
 	// Announcement watch: how many days before the expected preview the
 	// teaser post typically appears (drives the poll schedule).
 	TeaserLeadDays int
+	// LiveRoomID is the official Bilibili live room. Its embedded system
+	// announcement states the scheduled preview stream ("将于10月23日晚20:00
+	// 开启") — an official teaser source that keeps working while the
+	// dynamics feed is risk-controlled.
+	LiveRoomID string
 	// Accent colors for the generated fallback visuals.
 	ColorFrom string
 	ColorTo   string
@@ -93,7 +98,7 @@ var All = []Game{
 		UpdateTitle:   regexp.MustCompile(`(\d+\.\d+)\s*版本更新说明`),
 		ExcludeTitle:  regexp.MustCompile(`性能|设备|FAQ|补偿|优化|问题修复`),
 		SeriesKeyword: "前瞻", SearchKeyword: "原神 前瞻",
-		Vendor: "mihoyo", StaggerRank: 1, TeaserLeadDays: 4,
+		Vendor: "mihoyo", StaggerRank: 1, TeaserLeadDays: 4, LiveRoomID: "21987615",
 		ColorFrom: "#3b82f6", ColorTo: "#1e3a8a",
 	},
 	{
@@ -103,7 +108,7 @@ var All = []Game{
 		UpdateTitle:   regexp.MustCompile(`(\d+\.\d+)\s*版本[「『].*?[」』]\s*版本更新说明|(\d+\.\d+)\s*版本更新说明`),
 		ExcludeTitle:  regexp.MustCompile(`补偿|延长|优化|问题修复|FAQ`),
 		SeriesKeyword: "前瞻", SearchKeyword: "崩坏星穹铁道 前瞻",
-		Vendor: "mihoyo", StaggerRank: 2, TeaserLeadDays: 4,
+		Vendor: "mihoyo", StaggerRank: 2, TeaserLeadDays: 4, LiveRoomID: "27263119",
 		ColorFrom: "#a78bfa", ColorTo: "#4c1d95",
 	},
 	{
@@ -113,7 +118,7 @@ var All = []Game{
 		UpdateTitle:   regexp.MustCompile(`(\d+\.\d+)\s*版本[「『].*?[」』]\s*更新(?:公告|说明)|(\d+\.\d+)\s*版本更新(?:公告|说明)`),
 		ExcludeTitle:  regexp.MustCompile(`FAQ|性能|设备|优化|问题修复`),
 		SeriesKeyword: "前瞻", SearchKeyword: "绝区零 前瞻",
-		Vendor: "mihoyo", StaggerRank: 3, TeaserLeadDays: 4,
+		Vendor: "mihoyo", StaggerRank: 3, TeaserLeadDays: 4, LiveRoomID: "32805602",
 		ColorFrom: "#f59e0b", ColorTo: "#7c2d12",
 	},
 	{
@@ -123,7 +128,7 @@ var All = []Game{
 		UpdateTitle:   regexp.MustCompile(`(\d+\.\d+)\s*版本(?:内容说明|更新维护预告)`),
 		ExcludeTitle:  regexp.MustCompile(`补偿|优化|问题修复|FAQ`),
 		SeriesKeyword: "前瞻", SearchKeyword: "鸣潮 前瞻",
-		Vendor: "kuro", StaggerRank: 1, TeaserLeadDays: 5,
+		Vendor: "kuro", StaggerRank: 1, TeaserLeadDays: 5, LiveRoomID: "27354807",
 		ColorFrom: "#22d3ee", ColorTo: "#155e75",
 	},
 	{
@@ -133,7 +138,7 @@ var All = []Game{
 		UpdateTitle:   regexp.MustCompile(`版本更新说明`),
 		ExcludeTitle:  regexp.MustCompile(`研发通讯|补偿|优化|问题修复|FAQ|测试`),
 		SeriesKeyword: "前瞻", SearchKeyword: "明日方舟 终末地 前瞻",
-		Vendor: "hypergryph", StaggerRank: 1, TeaserLeadDays: 6,
+		Vendor: "hypergryph", StaggerRank: 1, TeaserLeadDays: 6, LiveRoomID: "1921300321",
 		ColorFrom: "#84cc16", ColorTo: "#365314",
 	},
 	{
@@ -143,7 +148,7 @@ var All = []Game{
 		UpdateTitle:   regexp.MustCompile(`(\d+\.\d+)\s*版本[「『].*?[」』]\s*更新公告`),
 		ExcludeTitle:  regexp.MustCompile(`停服维护|补偿|优化|问题修复|FAQ`),
 		SeriesKeyword: "前瞻", SearchKeyword: "异环 前瞻",
-		Vendor: "nte", StaggerRank: 1, TeaserLeadDays: 5,
+		Vendor: "nte", StaggerRank: 1, TeaserLeadDays: 5, LiveRoomID: "1890951177",
 		ColorFrom: "#f472b6", ColorTo: "#831843",
 	},
 }

@@ -148,7 +148,7 @@ func resolveYear(month, explicitYear int, haveExplicit bool, ref *Parts) (int, b
 }
 
 var dateTimeRe = regexp.MustCompile(
-	`(?:(\d{4})\s*[年/.]\s*)?(\d{1,2})\s*[月/.]\s*(\d{1,2})\s*日?(?:\s*[（(][^）)]*[）)])?\s*(?:晚上|晚间)?\s*(\d{1,2})\s*[:：]\s*(\d{2})`)
+	`(?:(\d{4})\s*[年/.]\s*)?(\d{1,2})\s*[月/.]\s*(\d{1,2})\s*日?(?:\s*[（(][^）)]*[）)])?\s*(?:晚上|晚间|晚)?\s*(\d{1,2})\s*[:：]\s*(\d{2})`)
 
 type DateTimeItem struct {
 	At    time.Time
@@ -449,6 +449,7 @@ func ExtractPhaseUpdate(text string, updateStart time.Time, game games.Game) (ti
 }
 
 var nextUpdateNear = regexp.MustCompile(`(?:上线|更新|开启|维护)`)
+var nextUpdateNoise = regexp.MustCompile(`前瞻|直播|播出|节目`)
 var nextUpdateDateOnly = []*regexp.Regexp{
 	regexp.MustCompile(`(\d{1,2})\s*月\s*(\d{1,2})\s*日[^。\n]{0,30}?(?:上线|更新|开启|维护)`),
 	regexp.MustCompile(`(?:上线|更新|开启|维护)[^。\n]{0,20}?(\d{1,2})\s*月\s*(\d{1,2})\s*日`),
@@ -467,27 +468,44 @@ func ExtractNextUpdateAnnouncement(text string, published time.Time, game games.
 		version = m[1]
 	}
 	for _, item := range DateTimes(text, published) {
-		if nextUpdateNear.MatchString(contextOf(text, item.Index, len(item.Text), 70)) {
+		around := contextOf(text, item.Index, len(item.Text), 70)
+		// "前瞻特别节目将于10月23日晚20:00开启" is a stream teaser, not a
+		// maintenance date — the loose 开启/更新 verbs must not claim it.
+		if nextUpdateNear.MatchString(around) && !nextUpdateNoise.MatchString(around) {
 			return &NextUpdateAnnouncement{Version: version, At: item.At}
 		}
 	}
 	// Date-only announcements ("将于11月11日更新") use the usual opening hour.
 	for _, pattern := range nextUpdateDateOnly {
-		if m := pattern.FindStringSubmatch(text); m != nil {
-			ref := partsFromRef(published)
-			month, _ := strconv.Atoi(m[1])
-			year, ok := resolveYear(month, 0, false, ref)
-			if !ok {
-				return nil
-			}
-			dayOfMonth, _ := strconv.Atoi(m[2])
-			start, _ := game.UpdateWindow()
-			at, valid := CSTISO(year, month, dayOfMonth, start/60, start%60)
-			if !valid {
-				return nil
-			}
-			return &NextUpdateAnnouncement{Version: version, At: at}
+		loc := pattern.FindStringSubmatchIndex(text)
+		if loc == nil {
+			continue
 		}
+		if nextUpdateNoise.MatchString(contextOf(text, loc[0], loc[1]-loc[0], 40)) {
+			continue
+		}
+		m := []string{}
+		for i := 2; i < len(loc); i += 2 {
+			if loc[i] >= 0 {
+				m = append(m, text[loc[i]:loc[i+1]])
+			}
+		}
+		if len(m) < 2 {
+			continue
+		}
+		ref := partsFromRef(published)
+		month, _ := strconv.Atoi(m[0])
+		year, ok := resolveYear(month, 0, false, ref)
+		if !ok {
+			return nil
+		}
+		dayOfMonth, _ := strconv.Atoi(m[1])
+		start, _ := game.UpdateWindow()
+		at, valid := CSTISO(year, month, dayOfMonth, start/60, start%60)
+		if !valid {
+			return nil
+		}
+		return &NextUpdateAnnouncement{Version: version, At: at}
 	}
 	return nil
 }

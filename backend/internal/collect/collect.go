@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -571,8 +572,13 @@ func (c *Collector) collectGame(ctx context.Context, id games.GameID) (*gameOutc
 		log("preview videos=%d", len(videos))
 	}
 
-	// 3. Sticky announcements: this cycle's teasers/dynamics were persisted
-	// above; load the last 35 days back as planner inputs.
+	// 2b. Live-room system announcement: the embedded reservation message
+	// ("将于10月23日晚20:00开启") is an official teaser that survives
+	// dynamics-feed risk control.
+	out.errs = c.collectLiveRoom(ctx, game, now, out.errs)
+
+	// 3. Sticky announcements: this cycle's teasers/dynamics/live messages
+	// were persisted above; load the last 35 days back as planner inputs.
 	announcements := c.storedAnnouncements(game, now)
 
 	// 4. Plan the next version (calibrated cadence when available).
@@ -747,8 +753,8 @@ func hasPreviewFact(text string) bool {
 // survives feed outages.
 func (c *Collector) storedAnnouncements(game games.Game, now time.Time) []parse.Announcement {
 	var posts []model.Post
-	if err := c.db.Where("game_id = ? AND (is_teaser = ? OR source_type = ?) AND publish_time > ?",
-		string(game.ID), true, "dynamic", now.Add(-35*day)).
+	if err := c.db.Where("game_id = ? AND (is_teaser = ? OR source_type IN ?) AND publish_time > ?",
+		string(game.ID), true, []string{"dynamic", "live"}, now.Add(-35*day)).
 		Order("publish_time DESC").Limit(60).Find(&posts).Error; err != nil {
 		return nil
 	}
@@ -764,6 +770,49 @@ func (c *Collector) storedAnnouncements(game games.Game, now time.Time) []parse.
 		out = append(out, parse.Announcement{Text: text, Pubdate: post.PublishTime, URL: post.URL})
 	}
 	return out
+}
+
+// collectLiveRoom reads the official live room's system announcement (the
+// embedded reservation message stating the preview date/time) and persists it
+// as a sticky teaser post. Two cheap requests per game; both the live-domain
+// API and the room page keep answering while the dynamics feed is blocked.
+func (c *Collector) collectLiveRoom(ctx context.Context, game games.Game,
+	now time.Time, errs []string) []string {
+	if game.LiveRoomID == "" {
+		return errs
+	}
+	text, published, err := c.bili.LiveRoomAnnouncement(ctx, game.LiveRoomID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return errs
+		}
+		c.log.Info("gacha: "+game.Name+" live room unavailable", "error", err.Error())
+		return errs
+	}
+	if text == "" {
+		return errs
+	}
+	if published.IsZero() {
+		published = now
+	}
+	isTeaser := strings.Contains(text, "前瞻") || strings.Contains(text, "直播") ||
+		strings.Contains(text, "版本更新")
+	title := text
+	if i := strings.IndexAny(text, "！!。"); i > 0 {
+		title = text[:i]
+	}
+	post := &model.Post{
+		GameID: string(game.ID), SourceType: "live",
+		ExternalID: "room-" + game.LiveRoomID,
+		URL:        "https://live.bilibili.com/" + game.LiveRoomID,
+		Title:      title, Summary: text, Author: game.Name,
+		PublishTime: published.UTC(), FetchedAt: now,
+		IsTeaser: isTeaser,
+	}
+	if err := c.upsertPost(post); err != nil {
+		errs = append(errs, "直播间公告入库："+err.Error())
+	}
+	return errs
 }
 
 func shortCST(t time.Time) string {
