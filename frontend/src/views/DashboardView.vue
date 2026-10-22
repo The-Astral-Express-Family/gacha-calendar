@@ -123,7 +123,10 @@ const allEvents = computed<AgendaEvent[]>(() => {
       confidence,
       evidence,
       url,
-      cover: kind === 'update' ? game.cover : undefined,
+      // update events carry the update-notice banner; preview events the
+      // newest teaser visual (官宣动态/直播间横幅), falling back to the
+      // game card visual when no teaser image was collected yet.
+      cover: kind === 'update' ? game.cover : game.preview_cover || game.cover,
       fallback: game.fallback,
     })
   }

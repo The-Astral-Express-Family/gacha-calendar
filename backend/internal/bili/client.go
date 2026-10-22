@@ -629,23 +629,69 @@ type dynamicFeed struct {
 			} `json:"module_dynamic"`
 		} `json:"modules"`
 	} `json:"items"`
+	HasMore bool   `json:"has_more"`
+	Offset  string `json:"offset"`
 }
 
-// Dynamics lists recent official dynamics; optional because some accounts
-// answer -352 — the caller treats an error as "no dynamics".
+// dynamicsPageWindow is how far back the feed paging walks: preview teasers
+// land at most ~3 weeks ahead of a stream, so older screens carry nothing the
+// planner needs.
+const dynamicsPageWindow = 21 * 24 * time.Hour
+
+// dynamicsMaxPages bounds the cursor walk for accounts that post many
+// dynamics a day (the official Genshin account pushes the teaser off the
+// first screen within days).
+const dynamicsMaxPages = 6
+
+// Dynamics lists recent official dynamics, walking the feed cursor a few
+// screens deep. Optional because some accounts answer -352 — the caller
+// treats an error as "no dynamics"; later-page failures keep the screens
+// already fetched.
 func (c *Client) Dynamics(ctx context.Context, mid string) ([]Dynamic, error) {
-	data, err := c.get(ctx,
-		"/x/polymer/web-dynamic/v1/feed/space?host_mid="+url.QueryEscape(mid)+
-			"&offset=&timezone_offset=-480",
-		2500*time.Millisecond, 1,
-		"https://space.bilibili.com/"+url.QueryEscape(mid)+"/dynamic")
-	if err != nil {
-		return nil, err
+	var out []Dynamic
+	offset := ""
+	for page := 0; page < dynamicsMaxPages; page++ {
+		data, err := c.get(ctx,
+			"/x/polymer/web-dynamic/v1/feed/space?host_mid="+url.QueryEscape(mid)+
+				"&offset="+url.QueryEscape(offset)+"&timezone_offset=-480",
+			2500*time.Millisecond, 1,
+			"https://space.bilibili.com/"+url.QueryEscape(mid)+"/dynamic")
+		if err != nil {
+			if page == 0 {
+				return nil, err
+			}
+			break
+		}
+		var payload dynamicFeed
+		if err := json.Unmarshal(data, &payload); err != nil {
+			if page == 0 {
+				return nil, err
+			}
+			break
+		}
+		out = append(out, parseDynamics(payload)...)
+		done := !payload.HasMore || payload.Offset == "" || len(payload.Items) == 0
+		if !done {
+			var oldest int64
+			for i := range payload.Items {
+				ts := int64(payload.Items[i].Modules.Author.PubTS)
+				if ts > 0 && (oldest == 0 || ts < oldest) {
+					oldest = ts
+				}
+			}
+			if oldest > 0 && time.Now().Unix()-oldest > int64(dynamicsPageWindow/time.Second) {
+				done = true
+			}
+		}
+		if done {
+			break
+		}
+		offset = payload.Offset
 	}
-	var payload dynamicFeed
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, err
-	}
+	return out, nil
+}
+
+func parseDynamics(payload dynamicFeed) []Dynamic {
 	out := make([]Dynamic, 0, len(payload.Items))
 	for _, item := range payload.Items {
 		dyn := Dynamic{ID: item.ID, Pubdate: int64(item.Modules.Author.PubTS)}
@@ -680,7 +726,7 @@ func (c *Client) Dynamics(ctx context.Context, mid string) ([]Dynamic, error) {
 		}
 		out = append(out, dyn)
 	}
-	return out, nil
+	return out
 }
 
 // Download fetches a binary asset (cover image) with a bilibili referer.
@@ -707,7 +753,8 @@ func (c *Client) Download(ctx context.Context, rawURL string) ([]byte, error) {
 type LiveRoom struct {
 	RoomID     string
 	Title      string
-	LiveStatus int // 0 idle, 1 streaming
+	LiveStatus int    // 0 idle, 1 streaming
+	Cover      string // room banner (user_cover): the preview key visual
 }
 
 // LiveRoomInfo reads the public room card from the live domain. This domain
@@ -725,6 +772,7 @@ func (c *Client) LiveRoomInfo(ctx context.Context, roomID string) (LiveRoom, err
 		RoomID     int    `json:"room_id"`
 		Title      string `json:"title"`
 		LiveStatus int    `json:"live_status"`
+		UserCover  string `json:"user_cover"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return LiveRoom{}, err
@@ -733,6 +781,7 @@ func (c *Client) LiveRoomInfo(ctx context.Context, roomID string) (LiveRoom, err
 		RoomID:     strconv.Itoa(payload.RoomID),
 		Title:      StripHTML(payload.Title),
 		LiveStatus: payload.LiveStatus,
+		Cover:      payload.UserCover,
 	}, nil
 }
 

@@ -834,8 +834,19 @@ func (c *Collector) collectLiveRoom(ctx context.Context, game games.Game,
 		PublishTime: published.UTC(), FetchedAt: now,
 		IsTeaser: isTeaser,
 	}
+	// The room banner carries the preview key visual before the stream; it is
+	// the only image this announcement source can offer. Best-effort — the
+	// announcement itself stays valuable without it.
+	if room, roomErr := c.bili.LiveRoomInfo(ctx, game.LiveRoomID); roomErr == nil && room.Cover != "" {
+		post.CoverURL = room.Cover
+	}
 	if err := c.upsertPost(post); err != nil {
 		errs = append(errs, "直播间公告入库："+err.Error())
+	} else if post.ID != 0 && post.CoverPath == "" && post.CoverURL != "" {
+		if path := c.covers.SavePost(ctx, post.ID, post.CoverURL); path != "" {
+			post.CoverPath = path
+			c.db.Save(post)
+		}
 	}
 	return errs
 }

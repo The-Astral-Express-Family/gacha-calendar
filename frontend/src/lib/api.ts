@@ -41,6 +41,7 @@ export interface Game {
   last_refresh_at?: TimeOnly
   last_error?: string
   cover?: string
+  preview_cover?: string
   fallback: string
   calibrated: boolean
   version_count: number

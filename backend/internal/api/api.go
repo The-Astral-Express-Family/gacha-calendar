@@ -581,6 +581,7 @@ type gameView struct {
 	LastRefreshAt *timeMetaOnly   `json:"last_refresh_at,omitempty"`
 	LastError     string          `json:"last_error,omitempty"`
 	Cover         string          `json:"cover,omitempty"`
+	PreviewCover  string          `json:"preview_cover,omitempty"`
 	Fallback      string          `json:"fallback"`
 	Calibrated    bool            `json:"calibrated"`
 	VersionCount  int64           `json:"version_count"`
@@ -621,9 +622,26 @@ func (h *handlers) games(w http.ResponseWriter, r *http.Request) {
 			p := viewPrediction(prediction, now, state.Name, h.announcementURL(prediction.AnnouncementID))
 			view.Prediction = &p
 		}
+		view.PreviewCover = h.previewCover(state.ID, now)
 		views = append(views, view)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": views})
+}
+
+// previewCover picks the newest image-bearing teaser post (官宣动态、直播
+// 间公告横幅、官方源) as the preview event's main visual. Teaser-ness is the
+// flag or a 前瞻/直播 title; the 60-day window drops last version's stale
+// banner once a newer teaser exists — newest-first ordering does the rest.
+func (h *handlers) previewCover(gameID string, now time.Time) string {
+	var post model.Post
+	err := h.d.DB.Where(
+		"game_id = ? AND cover_path != '' AND publish_time > ? AND (is_teaser = ? OR title LIKE ? OR title LIKE ?)",
+		gameID, now.Add(-60*24*time.Hour), true, "%前瞻%", "%直播%").
+		Order("publish_time DESC").First(&post).Error
+	if err != nil {
+		return ""
+	}
+	return post.CoverPath
 }
 
 func maxInt(a, b int) int {
