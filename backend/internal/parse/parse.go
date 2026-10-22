@@ -449,7 +449,11 @@ func ExtractPhaseUpdate(text string, updateStart time.Time, game games.Game) (ti
 }
 
 var nextUpdateNear = regexp.MustCompile(`(?:上线|更新|开启|维护)`)
-var nextUpdateNoise = regexp.MustCompile(`前瞻|直播|播出|节目`)
+
+// nextUpdateNoise drops dates that belong to something other than the
+// maintenance itself: streams (前瞻/直播/播出/节目) and merchandise sales —
+// "将于10月14日开启预售" must never read as a version update date.
+var nextUpdateNoise = regexp.MustCompile(`前瞻|直播|播出|节目|预售|开售|贩售|上架|补货|众筹`)
 var nextUpdateDateOnly = []*regexp.Regexp{
 	regexp.MustCompile(`(\d{1,2})\s*月\s*(\d{1,2})\s*日[^。\n]{0,30}?(?:上线|更新|开启|维护)`),
 	regexp.MustCompile(`(?:上线|更新|开启|维护)[^。\n]{0,20}?(\d{1,2})\s*月\s*(\d{1,2})\s*日`),
