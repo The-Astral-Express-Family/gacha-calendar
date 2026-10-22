@@ -400,10 +400,10 @@ func (h *handlers) posts(w http.ResponseWriter, r *http.Request) {
 	}
 	if sourceType := r.URL.Query().Get("type"); sourceType != "" {
 		switch sourceType {
-		case "article", "dynamic", "video", "live":
+		case "article", "dynamic", "video", "live", "official":
 			query = query.Where("source_type = ?", sourceType)
 		default:
-			writeError(w, http.StatusBadRequest, "invalid_type", "type 允许 article/dynamic/video/live")
+			writeError(w, http.StatusBadRequest, "invalid_type", "type 允许 article/dynamic/video/live/official")
 			return
 		}
 	}

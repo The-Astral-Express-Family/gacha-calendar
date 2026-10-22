@@ -32,6 +32,7 @@ import (
 	"github.com/The-Astral-Express-Family/gacha-calendar/backend/internal/games"
 	"github.com/The-Astral-Express-Family/gacha-calendar/backend/internal/model"
 	"github.com/The-Astral-Express-Family/gacha-calendar/backend/internal/parse"
+	"github.com/The-Astral-Express-Family/gacha-calendar/backend/internal/vendor"
 )
 
 const day = 24 * time.Hour
@@ -143,11 +144,12 @@ func isDynamicNoise(text string) bool {
 }
 
 type Collector struct {
-	db     *gorm.DB
-	bili   *bili.Client
-	covers *covers.Downloader
-	log    *slog.Logger
-	opts   ScheduleOptions
+	db      *gorm.DB
+	bili    *bili.Client
+	covers  *covers.Downloader
+	vendors *vendor.Client
+	log     *slog.Logger
+	opts    ScheduleOptions
 
 	mu          sync.Mutex
 	running     bool
@@ -155,7 +157,7 @@ type Collector struct {
 }
 
 func New(db *gorm.DB, client *bili.Client, dl *covers.Downloader, logger *slog.Logger) *Collector {
-	return &Collector{db: db, bili: client, covers: dl, log: logger}
+	return &Collector{db: db, bili: client, covers: dl, vendors: vendor.New(), log: logger}
 }
 
 // SetSchedule installs the poll cadence (call before Start).
@@ -577,6 +579,10 @@ func (c *Collector) collectGame(ctx context.Context, id games.GameID) (*gameOutc
 	// dynamics-feed risk control.
 	out.errs = c.collectLiveRoom(ctx, game, now, out.errs)
 
+	// 2c. Publisher-owned announcement systems (in-game feed / official
+	// site) — fully independent of Bilibili.
+	out.errs = c.collectVendorPosts(ctx, game, now, out.errs)
+
 	// 3. Sticky announcements: this cycle's teasers/dynamics/live messages
 	// were persisted above; load the last 35 days back as planner inputs.
 	announcements := c.storedAnnouncements(game, now)
@@ -754,15 +760,21 @@ func hasPreviewFact(text string) bool {
 func (c *Collector) storedAnnouncements(game games.Game, now time.Time) []parse.Announcement {
 	var posts []model.Post
 	if err := c.db.Where("game_id = ? AND (is_teaser = ? OR source_type IN ?) AND publish_time > ?",
-		string(game.ID), true, []string{"dynamic", "live"}, now.Add(-35*day)).
+		string(game.ID), true, []string{"dynamic", "live", "official"}, now.Add(-35*day)).
 		Order("publish_time DESC").Limit(60).Find(&posts).Error; err != nil {
 		return nil
 	}
 	out := make([]parse.Announcement, 0, len(posts))
 	for _, post := range posts {
+		// Vendor posts carry the version name in the title and the dates in
+		// the brief — the planner needs both in one text.
 		text := post.Summary
-		if text == "" {
-			text = post.Title
+		if post.Title != "" && post.Title != post.Summary {
+			if text == "" {
+				text = post.Title
+			} else {
+				text = post.Title + "\n" + post.Summary
+			}
 		}
 		if text == "" || isDynamicNoise(text) {
 			continue
@@ -811,6 +823,74 @@ func (c *Collector) collectLiveRoom(ctx context.Context, game games.Game,
 	}
 	if err := c.upsertPost(post); err != nil {
 		errs = append(errs, "直播间公告入库："+err.Error())
+	}
+	return errs
+}
+
+// vendorRelevant filters the publisher feeds down to schedule-bearing posts;
+// the in-game announcement feed in particular is full of activity banners.
+var vendorRelevant = regexp.MustCompile(
+	`版本更新|更新说明|更新公告|内容说明|维护预告|前瞻|直播|研发通讯|版本说明`)
+
+// collectVendorPosts reads the publisher's own announcement system (see
+// internal/vendor) and persists schedule-relevant posts as sticky official
+// announcements. Independent of every Bilibili endpoint.
+func (c *Collector) collectVendorPosts(ctx context.Context, game games.Game,
+	now time.Time, errs []string) []string {
+	if game.VendorAnnouncer == "" {
+		return errs
+	}
+	var posts []vendor.Post
+	var err error
+	switch {
+	case strings.HasPrefix(game.VendorAnnouncer, "mihoyo-ann:"):
+		parts := strings.Split(game.VendorAnnouncer, ":")
+		if len(parts) != 4 {
+			return errs
+		}
+		posts, err = c.vendors.FetchMihoyoAnnouncements(ctx, parts[1], parts[2], parts[3])
+	case game.VendorAnnouncer == "endfield-site":
+		posts, err = c.vendors.FetchEndfieldNews(ctx)
+	default:
+		return errs
+	}
+	if err != nil {
+		if ctx.Err() == nil {
+			c.log.Info("gacha: "+game.Name+" vendor source unavailable",
+				"source", game.VendorAnnouncer, "error", err.Error())
+		}
+		return errs
+	}
+
+	stored := 0
+	for i := range posts {
+		post := posts[i]
+		text := post.Title
+		if !vendorRelevant.MatchString(text) {
+			continue
+		}
+		if post.PublishedAt.IsZero() {
+			post.PublishedAt = now
+		}
+		if post.PublishedAt.Before(now.Add(-45 * day)) {
+			continue
+		}
+		summary := firstNonEmptyStr(post.Brief, post.Subtitle)
+		isTeaser := strings.Contains(post.Title, "前瞻") || strings.Contains(post.Title, "直播")
+		if err := c.upsertPost(&model.Post{
+			GameID: string(game.ID), SourceType: "official",
+			ExternalID: post.ExternalID, URL: post.URL,
+			Title: post.Title, Summary: summary, Author: game.Name,
+			PublishTime: post.PublishedAt, FetchedAt: now,
+			IsTeaser: isTeaser,
+		}); err != nil {
+			errs = append(errs, "官方源入库："+err.Error())
+			continue
+		}
+		stored++
+	}
+	if stored > 0 {
+		c.logGame(game)("vendor source: %d posts", stored)
 	}
 	return errs
 }

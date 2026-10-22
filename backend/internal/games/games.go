@@ -73,6 +73,12 @@ type Game struct {
 	// 开启") — an official teaser source that keeps working while the
 	// dynamics feed is risk-controlled.
 	LiveRoomID string
+	// VendorAnnouncer names the publisher-owned announcement source, when one
+	// is wired in internal/vendor: "mihoyo-ann:<biz>:<game>:<region>" reads
+	// the in-game announcement feed, "endfield-site" the official web site.
+	// Games without an anonymous vendor source rely on the Bilibili column
+	// list + live-room pair (different endpoints, independently rate-limited).
+	VendorAnnouncer string
 	// Accent colors for the generated fallback visuals.
 	ColorFrom string
 	ColorTo   string
@@ -119,7 +125,8 @@ var All = []Game{
 		ExcludeTitle:  regexp.MustCompile(`FAQ|性能|设备|优化|问题修复`),
 		SeriesKeyword: "前瞻", SearchKeyword: "绝区零 前瞻",
 		Vendor: "mihoyo", StaggerRank: 3, TeaserLeadDays: 4, LiveRoomID: "32805602",
-		ColorFrom: "#f59e0b", ColorTo: "#7c2d12",
+		VendorAnnouncer: "mihoyo-ann:nap_cn:nap:prod_gf_cn",
+		ColorFrom:       "#f59e0b", ColorTo: "#7c2d12",
 	},
 	{
 		ID: WuWa, Name: "鸣潮", Mid: "1955897084", CycleDays: 42,
@@ -139,7 +146,8 @@ var All = []Game{
 		ExcludeTitle:  regexp.MustCompile(`研发通讯|补偿|优化|问题修复|FAQ|测试`),
 		SeriesKeyword: "前瞻", SearchKeyword: "明日方舟 终末地 前瞻",
 		Vendor: "hypergryph", StaggerRank: 1, TeaserLeadDays: 6, LiveRoomID: "1921300321",
-		ColorFrom: "#84cc16", ColorTo: "#365314",
+		VendorAnnouncer: "endfield-site",
+		ColorFrom:       "#84cc16", ColorTo: "#365314",
 	},
 	{
 		ID: NTE, Name: "异环", Mid: "3546636978489848", CycleDays: 42,
