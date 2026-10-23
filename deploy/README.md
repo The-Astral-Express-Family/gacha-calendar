@@ -105,7 +105,8 @@ scp backend/gacha-calendar-linux-amd64 root@modenc.top:/opt/gacha-calendar/gacha
 ssh root@modenc.top 'cd /opt/gacha-calendar && mv gacha-calendar.new gacha-calendar && systemctl restart gacha-calendar'
 ```
 
-重启后观察：`journalctl -u gacha-calendar -f`、`curl -s localhost:8790/healthz`。
+重启后观察：`journalctl -u gacha-calendar -f`、`curl -s localhost:8790/healthz`
+（监听地址由 env 文件的 `ADDR` 设定，线上为 `127.0.0.1:8790`；代码默认 `127.0.0.1:8787`）。
 
 ## 迁移服务器
 

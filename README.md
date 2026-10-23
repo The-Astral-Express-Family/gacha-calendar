@@ -25,15 +25,15 @@
 # 后端（默认监听 127.0.0.1:8787，数据库 ./data/gacha.db）
 cd backend && go run ./cmd/gacha-calendar
 
-# 前端（Vite dev server，/api 代理到后端）
-cd frontend && pnpm install && pnpm dev
+# 前端（Vite dev server，/api、/covers 等代理到后端）
+# 代理目标读 API_ORIGIN，默认 http://127.0.0.1:8791；按上面默认端口起后端时需显式指定
+cd frontend && pnpm install && API_ORIGIN=http://127.0.0.1:8787 pnpm dev
 
 # 测试
 cd backend && go test ./...
 
-# 构建单二进制（先构建前端，再嵌入）
-cd frontend && pnpm build
-cd backend && go build -o gacha-calendar ./cmd/gacha-calendar
+# 构建单二进制（前端 → 拷入 backend/web/assets/dist → go build 嵌入）
+./build.sh    # Windows 用 build.ps1
 ```
 
 ## API 概览
