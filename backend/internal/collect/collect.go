@@ -579,13 +579,11 @@ func (c *Collector) collectGame(ctx context.Context, id games.GameID) (*gameOutc
 	}
 
 	// 2. Preview videos + official dynamics → raw posts + planner inputs.
-	var videos []parse.Video
-	if current != nil {
-		var errs []string
-		videos, errs = c.collectVideosAndDynamics(ctx, game, current, now, out.errs)
-		out.errs = errs
-		log("preview videos=%d", len(videos))
-	}
+	// Runs for pre-launch games too (nil current): the teaser dynamic is
+	// their only official announcement source.
+	videos, errs := c.collectVideosAndDynamics(ctx, game, current, now, out.errs)
+	out.errs = errs
+	log("preview videos=%d", len(videos))
 
 	// 2b. Live-room system announcement: the embedded reservation message
 	// ("将于10月23日晚20:00开启") is an official teaser that survives
@@ -600,12 +598,16 @@ func (c *Collector) collectGame(ctx context.Context, id games.GameID) (*gameOutc
 	// were persisted above; load the last 35 days back as planner inputs.
 	announcements := c.storedAnnouncements(game, now)
 
-	// 4. Plan the next version (calibrated cadence when available).
+	// 4. Plan the next version (calibrated cadence when available). A game
+	// with no version history yet (pre-launch) can still calendar an
+	// officially announced stream via the preview-only path.
 	if current != nil {
 		out.plan = parse.PlanNext(game, current, now, videos, announcements, c.gameCadence(id))
-		out.plan = c.carryOfficialPreview(id, out.plan, now)
-		out.plan = c.mergeOverride(game, id, out.plan)
+	} else {
+		out.plan = parse.PreviewOnlyPlan(game, now, announcements)
 	}
+	out.plan = c.carryOfficialPreview(id, out.plan, now)
+	out.plan = c.mergeOverride(game, id, out.plan)
 	return out, GameResult{Game: string(id)}
 }
 
@@ -1085,7 +1087,7 @@ func (c *Collector) collectVideosAndDynamics(ctx context.Context, game games.Gam
 	// Do not let the previous version's preview video masquerade as the next
 	// one: only uploads after the current version went live are candidates.
 	floor := now.Add(-120 * day)
-	if !current.UpdateStart.IsZero() {
+	if current != nil && !current.UpdateStart.IsZero() {
 		floor = current.UpdateStart.Add(-day)
 	}
 	var videos []parse.Video

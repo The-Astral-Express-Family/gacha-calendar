@@ -19,6 +19,8 @@ const (
 	Genshin  GameID = "genshin"
 	HSR      GameID = "hsr"
 	ZZZ      GameID = "zzz"
+	Hi3      GameID = "hi3"
+	Bugu     GameID = "bugu"
 	WuWa     GameID = "wuwa"
 	Endfield GameID = "endfield"
 	NTE      GameID = "nte"
@@ -50,6 +52,16 @@ type Game struct {
 	// HSR/ZZZ publish an explicit version end date; a truncated summary must
 	// not silently downgrade to the arithmetic cadence.
 	ExpectVersionEnd bool
+	// UpdateOnPublish marks games whose version-update article is patch
+	// notes published on maintenance day itself, without an explicit
+	// maintenance datetime (HI3): when no dated window can be extracted,
+	// the publication date plus the configured window is the update time.
+	UpdateOnPublish bool
+	// NoRegularPreview marks games without per-version preview streams
+	// (HI3 since Part 2): the planner never fabricates a preview slot from
+	// cadence or weekday rules — only explicit announcements or official
+	// videos create preview events.
+	NoRegularPreview bool
 	// Endfield has run 4-, 6- and 7-week versions; a date explicitly marked
 	// as a content update 21–35 days out beats the arithmetic cycle.
 	PhaseHint     bool
@@ -127,6 +139,33 @@ var All = []Game{
 		Vendor: "mihoyo", StaggerRank: 3, TeaserLeadDays: 4, LiveRoomID: "32805602",
 		VendorAnnouncer: "mihoyo-ann:nap_cn:nap:prod_gf_cn",
 		ColorFrom:       "#f59e0b", ColorTo: "#7c2d12",
+	},
+	{
+		ID: Hi3, Name: "崩坏3", Mid: "256667467", CycleDays: 60,
+		UpdateStart: "06:00", UpdateEnd: "11:00", PreviewStart: "19:30", PreviewEnd: "21:00",
+		PreviewMode: PreviewSameDay, UpdateOnPublish: true, NoRegularPreview: true,
+		// HI3 titles put the version name first: 「时序照新」9.1版本更新公告.
+		UpdateTitle:  regexp.MustCompile(`(\d+\.\d+)\s*版本更新公告`),
+		ExcludeTitle: regexp.MustCompile(`FAQ|补偿|优化|问题修复|国际服`),
+		// No per-version preview streams since Part 2 (the occasional big-event
+		// program still arrives as an official teaser announcement); the search
+		// fallback exists only for those replays.
+		SeriesKeyword: "前瞻", SearchKeyword: "崩坏3 前瞻",
+		Vendor: "mihoyo", StaggerRank: 4, TeaserLeadDays: 4, LiveRoomID: "7050189",
+		ColorFrom: "#818cf8", ColorTo: "#312e81",
+	},
+	{
+		// Pre-launch (公测定档 2026 冬季): no version history yet, so until the
+		// first version notice the calendar can only carry officially announced
+		// streams via the preview-only plan path.
+		ID: Bugu, Name: "星布谷地", Mid: "3546622923377024", CycleDays: 42,
+		UpdateStart: "06:00", UpdateEnd: "11:00", PreviewStart: "19:00", PreviewEnd: "21:00",
+		PreviewMode:   PreviewSameDay,
+		UpdateTitle:   regexp.MustCompile(`(\d+\.\d+)\s*版本更新公告`),
+		ExcludeTitle:  regexp.MustCompile(`FAQ|补偿|优化|问题修复|测试`),
+		SeriesKeyword: "前瞻", SearchKeyword: "星布谷地 前瞻",
+		Vendor: "mihoyo", StaggerRank: 5, TeaserLeadDays: 4,
+		ColorFrom: "#34d399", ColorTo: "#065f46",
 	},
 	{
 		ID: WuWa, Name: "鸣潮", Mid: "1955897084", CycleDays: 42,

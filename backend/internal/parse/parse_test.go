@@ -480,3 +480,75 @@ func TestLiveRoomAnnouncementParse(t *testing.T) {
 	assertISO(t, "previewStart", plan.PreviewStart.Format(time.RFC3339), "2026-10-23T20:00:00+08:00")
 	assertISO(t, "previewConfidence", plan.PreviewConfidence, "official")
 }
+
+// The 9.1 patch notes publish on maintenance day and never state the window;
+// every datetime in the text is an "更新后~X月X日HH:MM" event window that
+// must not be mistaken for the maintenance time (live capture 2026-09-24).
+func TestHi3PatchNotesAtPublish(t *testing.T) {
+	published := utcMoment(t, "2026-09-24T03:02:00Z")
+	facts := ParseArticle("「时序照新」9.1版本更新公告",
+		"欢迎来到9.1版本——「时序照新」！ =====更新内容===== ★ 全新虚数属性S级角色——「时序之律者」 "+
+			"9.1版本更新后，协同者希娜狄雅将解放新的能力。"+
+			"9.1版本更新后~10月16日12:00期间开启「镌刻于黎明的誓约」服装补给。"+
+			"9.1版本更新后~11月26日04:00期间，累计登录7日即可领取奖励。"+
+			"10月1日12:00~10月22日12:00期间，登录游戏共计可领取庆典角色十连补给券×2。"+
+			"9.1版本更新后~10月22日10:00期间完成面板任务可获取奖励。",
+		published, game(games.Hi3))
+	assertISO(t, "version", facts.Version, "9.1")
+	assertISO(t, "versionName", facts.VersionName, "时序照新")
+	assertISO(t, "updateStart", facts.UpdateStart.Format(time.RFC3339), "2026-09-24T06:00:00+08:00")
+	assertISO(t, "updateEnd", facts.UpdateEnd.Format(time.RFC3339), "2026-09-24T11:00:00+08:00")
+	if !facts.VersionEnd.IsZero() {
+		t.Errorf("versionEnd = %s, want zero", facts.VersionEnd)
+	}
+}
+
+// 星布谷地 announced its pre-launch stream (公测前瞻特别节目, 2026-11-01
+// 19:00) before any version exists: the preview-only plan carries it.
+func TestBuguPreviewOnlyPlan(t *testing.T) {
+	now := utcMoment(t, "2026-10-23T05:00:00Z")
+	teaser := Announcement{
+		Text:    "✨《星布谷地》公测前瞻特别节目官宣！直播将于11月1日周日晚19:00正式开启，敬请期待！",
+		Pubdate: utcMoment(t, "2026-10-23T03:30:00Z"),
+	}
+	plan := PreviewOnlyPlan(game(games.Bugu), now, []Announcement{teaser})
+	if plan == nil {
+		t.Fatal("preview-only plan is nil")
+	}
+	assertISO(t, "previewStart", plan.PreviewStart.Format(time.RFC3339), "2026-11-01T19:00:00+08:00")
+	assertISO(t, "previewEnd", plan.PreviewEnd.Format(time.RFC3339), "2026-11-01T21:00:00+08:00")
+	assertISO(t, "previewConfidence", plan.PreviewConfidence, "official")
+	if !plan.UpdateStart.IsZero() {
+		t.Errorf("updateStart = %s, want zero", plan.UpdateStart)
+	}
+	if plan2 := PreviewOnlyPlan(game(games.Bugu), now, nil); plan2 != nil {
+		t.Errorf("plan without announcements = %v, want nil", plan2)
+	}
+}
+
+// HI3 runs no per-version preview streams: no slot may be fabricated from
+// weekday rules, but an explicit big-event teaser still calendars.
+func TestHi3NoFabricatedPreview(t *testing.T) {
+	published := utcMoment(t, "2026-09-24T03:02:00Z")
+	current := ParseArticle("「时序照新」9.1版本更新公告",
+		"欢迎来到9.1版本。9.1版本更新后~10月16日12:00期间开启补给。", published, game(games.Hi3))
+	plan := PlanNext(game(games.Hi3), &current, utcMoment(t, "2026-10-23T04:00:00Z"), nil, nil, nil)
+	if plan == nil {
+		t.Fatal("plan is nil")
+	}
+	if !plan.PreviewStart.IsZero() {
+		t.Errorf("previewStart = %s, want zero (no fabricated slot)", plan.PreviewStart)
+	}
+	assertISO(t, "previewConfidence", plan.PreviewConfidence, "none")
+
+	stream := Announcement{
+		Text:    "《崩坏3》十周年前瞻特别节目将于11月13日周五19:00开启！",
+		Pubdate: utcMoment(t, "2026-10-23T04:00:00Z"),
+	}
+	plan = PlanNext(game(games.Hi3), &current, utcMoment(t, "2026-10-23T04:00:00Z"), nil,
+		[]Announcement{stream}, nil)
+	if plan.PreviewStart.IsZero() {
+		t.Fatal("explicit teaser was dropped")
+	}
+	assertISO(t, "previewStart", plan.PreviewStart.Format(time.RFC3339), "2026-11-13T19:00:00+08:00")
+}

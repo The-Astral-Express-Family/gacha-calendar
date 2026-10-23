@@ -148,7 +148,7 @@ func resolveYear(month, explicitYear int, haveExplicit bool, ref *Parts) (int, b
 }
 
 var dateTimeRe = regexp.MustCompile(
-	`(?:(\d{4})\s*[年/.]\s*)?(\d{1,2})\s*[月/.]\s*(\d{1,2})\s*日?(?:\s*[（(][^）)]*[）)])?\s*(?:晚上|晚间|晚)?\s*(\d{1,2})\s*[:：]\s*(\d{2})`)
+	`(?:(\d{4})\s*[年/.]\s*)?(\d{1,2})\s*[月/.]\s*(\d{1,2})\s*日?(?:\s*[（(][^）)]*[）)])?(?:\s*周[一二三四五六日天])?\s*(?:晚上|晚间|晚)?\s*(\d{1,2})\s*[:：]\s*(\d{2})`)
 
 type DateTimeItem struct {
 	At    time.Time
@@ -193,19 +193,6 @@ func contextOf(text string, index, length, radius int) string {
 		end = len(text)
 	}
 	return text[start:end]
-}
-
-// firstNear returns the first dated instant whose surrounding text matches near.
-func firstNear(text string, published time.Time, near *regexp.Regexp, limit int) *DateTimeItem {
-	for _, item := range DateTimes(text, published) {
-		if limit >= 0 && item.Index > limit {
-			break
-		}
-		if near.MatchString(contextOf(text, item.Index, len(item.Text), 60)) {
-			return &item
-		}
-	}
-	return nil
 }
 
 func labelledDate(text, label string, published time.Time) (time.Time, bool) {
@@ -306,8 +293,29 @@ func ExtractUpdateStart(text string, published time.Time, game games.Game) (time
 	}
 
 	// Last resort: the first update-related date in the opening section.
-	if opened := firstNear(text, published, regexp.MustCompile(`更新|维护`), 1800); opened != nil {
-		return opened.At, true
+	// Dates governed by "版本更新后" style wording belong to events opening
+	// after the update (banners, shops) — never to maintenance itself.
+	nearUpdate := regexp.MustCompile(`更新|维护`)
+	afterUpdate := regexp.MustCompile(`更新后|更新完毕|更新结束|上线后|开启后`)
+	for _, item := range DateTimes(text, published) {
+		if item.Index > 1800 {
+			break
+		}
+		context := contextOf(text, item.Index, len(item.Text), 60)
+		if nearUpdate.MatchString(context) && !afterUpdate.MatchString(context) {
+			return item.At, true
+		}
+	}
+	// HI3-style patch notes publish on maintenance day itself and never state
+	// the window: the publication date plus the game's usual window is the
+	// maintenance time.
+	if game.UpdateOnPublish {
+		if p, ok := CSTParts(published); ok {
+			start, _ := games.Minutes(game.UpdateStart)
+			if at, valid := CSTISO(p.Year, p.Month, p.Day, start/60, start%60); valid {
+				return at, true
+			}
+		}
 	}
 	return time.Time{}, false
 }
@@ -934,7 +942,11 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time,
 		}
 	}
 
-	if previewStart.IsZero() && !chosen.suppressLive {
+	// Games without regular per-version streams (HI3) never get a fabricated
+	// slot: only explicit announcements and official videos create previews.
+	fabricatePreview := !chosen.suppressLive && !game.NoRegularPreview
+
+	if previewStart.IsZero() && fabricatePreview {
 		if at, ok := PreviewByCadence(updateStart, game, cadence); ok {
 			previewStart = at
 			previewConfidence = "inferred"
@@ -942,7 +954,7 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time,
 		}
 	}
 
-	if previewStart.IsZero() && !chosen.suppressLive {
+	if previewStart.IsZero() && fabricatePreview {
 		if at, ok := PreviewByRule(updateStart, game); ok {
 			previewStart = at
 			previewConfidence = "inferred"
@@ -951,11 +963,19 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time,
 	}
 
 	if !previewStart.IsZero() && !previewStart.Before(updateStart) {
-		if at, ok := PreviewByRule(updateStart, game); ok {
-			previewStart = at
+		if fabricatePreview {
+			if at, ok := PreviewByRule(updateStart, game); ok {
+				previewStart = at
+			}
+			previewConfidence = "inferred"
+			previewEvidence = "更新时间前两周的周五 " + game.PreviewStart
+		} else {
+			// An explicit stream after its own update is a parsing artifact;
+			// without the fabrication fallback it is dropped, not moved.
+			previewStart = time.Time{}
+			previewConfidence = ""
+			previewEvidence = ""
 		}
-		previewConfidence = "inferred"
-		previewEvidence = "更新时间前两周的周五 " + game.PreviewStart
 	}
 
 	// Inferred slots step out of sensitive windows (official times never move).
@@ -967,9 +987,13 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time,
 	}
 
 	if previewStart.IsZero() {
-		if chosen.suppressLive {
+		switch {
+		case chosen.suppressLive:
 			previewConfidence = "none"
 			previewEvidence = "阶段内容更新，通常无前瞻直播"
+		case game.NoRegularPreview:
+			previewConfidence = "none"
+			previewEvidence = "该游戏通常无版本前瞻直播"
 		}
 	} else {
 		_, endMinutes := game.PreviewWindow()
@@ -989,4 +1013,46 @@ func PlanNext(game games.Game, current *ArticleFacts, now time.Time,
 		PreviewEvidence:   previewEvidence,
 		IsPhaseUpdate:     chosen.isPhase,
 	}
+}
+
+// PreviewOnlyPlan calendars an officially announced stream for a game that
+// has no version history yet (pre-launch titles such as 星布谷地 before 公测):
+// without a version anchor the plan carries the preview alone. Returns nil
+// when no sticky announcement states a usable stream time.
+func PreviewOnlyPlan(game games.Game, now time.Time, announcements []Announcement) *Plan {
+	for _, item := range announcements {
+		parsed := parseAnnouncement(item.Text, item.Pubdate, game)
+		if parsed.PreviewAt.IsZero() {
+			continue
+		}
+		// Same freshness bound as the announcement path in PlanNext; the upper
+		// end just admits far-ahead pre-launch announcements.
+		if !parsed.PreviewAt.After(now.Add(-2 * day)) {
+			continue
+		}
+		if parsed.PreviewAt.After(now.Add(56 * day)) {
+			continue
+		}
+		confidence := "inferred"
+		evidence := "官方前瞻日期，时刻按惯例推算"
+		if explicit, ok := ExtractExplicitPreviewAt(item.Text, item.Pubdate); ok && explicit.Equal(parsed.PreviewAt) {
+			confidence = "official"
+			evidence = "官方前瞻公告（明确日期与时间）"
+		}
+		previewStart := parsed.PreviewAt
+		if confidence == "inferred" {
+			if shifted, name, moved := ShiftFromSensitive(previewStart); moved {
+				previewStart = shifted
+				evidence = fmt.Sprintf("%s（避开%s）", evidence, name)
+			}
+		}
+		_, endMinutes := game.PreviewWindow()
+		return &Plan{
+			PreviewStart:      previewStart,
+			PreviewEnd:        atMinutes(previewStart, endMinutes),
+			PreviewConfidence: confidence,
+			PreviewEvidence:   evidence,
+		}
+	}
+	return nil
 }
